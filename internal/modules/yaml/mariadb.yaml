@@ -1,0 +1,11 @@
+artifact_ext: sql
+supports_local: true
+backup:
+  command:
+    - if [ -n "${DB_NAME}" ]; then mariadb-dump -u"${DB_USER}" -p"${DB_PASS}" --single-transaction "${DB_NAME}" > "{{target_file}}"; else mariadb-dump -u"${DB_USER}" -p"${DB_PASS}" --single-transaction --all-databases > "{{target_file}}"; fi
+  target_file: /tmp/sloth-mariadb-backup.sql
+restore:
+  backup_file:
+    to_container: /tmp/sloth-mariadb-restore.sql
+  command:
+    - mariadb -u"${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" < "{{backup_file}}"

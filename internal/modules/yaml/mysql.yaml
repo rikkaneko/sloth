@@ -1,0 +1,11 @@
+artifact_ext: sql
+supports_local: true
+backup:
+  command:
+    - if [ -n "${DB_NAME}" ]; then mysqldump -u"${DB_USER}" -p"${DB_PASS}" --single-transaction "${DB_NAME}" > "{{target_file}}"; else mysqldump -u"${DB_USER}" -p"${DB_PASS}" --single-transaction --all-databases > "{{target_file}}"; fi
+  target_file: /tmp/sloth-mysql-backup.sql
+restore:
+  backup_file:
+    to_container: /tmp/sloth-mysql-restore.sql
+  command:
+    - mysql -u"${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" < "{{backup_file}}"

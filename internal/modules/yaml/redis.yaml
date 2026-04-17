@@ -1,0 +1,9 @@
+artifact_ext: rdb
+supports_local: true
+backup:
+  command:
+    - redis-cli --rdb "{{target_file}}"
+  target_file: /tmp/sloth-redis-dump.rdb
+restore:
+  backup_file:
+    to_container: /data/dump.rdb
