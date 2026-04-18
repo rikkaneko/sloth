@@ -60,11 +60,13 @@ service:
 - Local mode support for: `mariadb`, `mysql`, `pgsql`, `directus`, `rabbitmq`, `redis`
 - S3-compatible storage backend (AWS S3, MinIO, Garage, Backblaze B2, etc.)
 - Native object versioning mode and sloth-managed incremental versioning mode
-- Engine auto-detection (`podman` then `docker`) by `container_name` when engine is omitted
+- Engine auto-detection (`podman` then `docker`) by `container_name`, or by `<service-id>` when container name is omitted
 - Automatic env loading with `${VAR}` interpolation
 - Sectioned `--help` output for root and subcommands with dynamic available values for `--type`, `--engine`, and `--storage`
+- Short and long flag pairs for backup/restore/list (`-t/-c/-E/-l/-s/-e/-m/-n/-N/-v/-a/-d`)
+- Unified info/debug logging (`--debug`) including external command output and S3 API call summaries
 - Built-in module templates embedded from per-service YAML files under `internal/modules/yaml/*.yaml`
-- Colorized command output and table-formatted backup/service listings
+- Colorized command output and solid-border table-formatted backup/service listings
 
 ## Usage Examples
 Backup a service:
@@ -75,6 +77,11 @@ sloth backup app-db
 Create a new local service entry and backup immediately:
 ```bash
 sloth backup app-db --type mysql --container-name app-db-container --engine docker
+```
+
+Backup in local mode:
+```bash
+sloth backup app-db --type mysql --local
 ```
 
 List configured services:
@@ -99,7 +106,7 @@ sloth restore app-db --apply ./app-db-backup-20260417-120000-3.sql
 
 For Redis local restore target path override:
 ```bash
-REDIS_RDB_PATH=/var/lib/redis/dump.rdb sloth restore redis-service --engine local --apply ./redis-service-backup-20260417-120000-latest.rdb
+REDIS_RDB_PATH=/var/lib/redis/dump.rdb sloth restore redis-service --local --apply ./redis-service-backup-20260417-120000-latest.rdb
 ```
 
 ## Documentation

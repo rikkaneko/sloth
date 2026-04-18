@@ -9,7 +9,7 @@ import (
 	"sloth/internal/modules"
 )
 
-var supportedEngines = []string{"docker", "podman", "local"}
+var supportedEngines = []string{"docker", "podman"}
 
 type helpCatalog struct {
 	serviceTypes  []string
@@ -89,14 +89,16 @@ func (a App) printBackupHelp() {
 		"    sloth backup <service-id> [options]",
 		"",
 		"OPTIONS",
-		fmt.Sprintf("    --type <service-type>            service type (available: %s)", serviceTypes),
-		"    --container-name <name>          target container name",
-		fmt.Sprintf("    --engine <container-engine>      engine name (available: %s)", engines),
-		fmt.Sprintf("    --storage <storage-name>         storage name (available: %s)", storages),
-		"    --env <env-file>                 env file path (default: .env)",
-		"    --module-config <yaml-path>      module override yaml path",
-		"    --volume-name <volume-name>      single volume name for type=volume",
-		"    --volume-names <n1,n2>           comma-separated volume names for type=volume",
+		fmt.Sprintf("    -t, --type <service-type>        service type (available: %s)", serviceTypes),
+		"    -c, --container-name <name>      target container name",
+		fmt.Sprintf("    -E, --engine <container-engine>  engine name (available: %s)", engines),
+		"    -l, --local                      run in local mode",
+		fmt.Sprintf("    -s, --storage <storage-name>     storage name (available: %s)", storages),
+		"    -e, --env <env-file>             env file path (default: .env)",
+		"    -m, --module-config <yaml-path>  module override yaml path",
+		"    -n, --volume-name <volume-name>  single volume name for type=volume",
+		"    -N, --volume-names <n1,n2>       comma-separated volume names for type=volume",
+		"    -d, --debug                      show debug logs",
 		"    -h, --help                       show this help message",
 		"",
 	}
@@ -119,14 +121,16 @@ func (a App) printRestoreHelp() {
 		"    sloth restore <service-id> --apply <backup-file> [options]",
 		"",
 		"OPTIONS",
-		"    --version <version|latest>       backup version to retrieve (default: latest)",
-		"    --apply <backup-file>            apply a downloaded backup file",
-		fmt.Sprintf("    --type <service-type>            service type (available: %s)", serviceTypes),
-		"    --container-name <name>          target container name",
-		fmt.Sprintf("    --engine <container-engine>      engine name (available: %s)", engines),
-		fmt.Sprintf("    --storage <storage-name>         storage name (available: %s)", storages),
-		"    --env <env-file>                 env file path (default: .env)",
-		"    --module-config <yaml-path>      module override yaml path",
+		"    -v, --version <version|latest>   backup version to retrieve (default: latest)",
+		"    -a, --apply <backup-file>        apply a downloaded backup file",
+		fmt.Sprintf("    -t, --type <service-type>        service type (available: %s)", serviceTypes),
+		"    -c, --container-name <name>      target container name",
+		fmt.Sprintf("    -E, --engine <container-engine>  engine name (available: %s)", engines),
+		"    -l, --local                      run in local mode",
+		fmt.Sprintf("    -s, --storage <storage-name>     storage name (available: %s)", storages),
+		"    -e, --env <env-file>             env file path (default: .env)",
+		"    -m, --module-config <yaml-path>  module override yaml path",
+		"    -d, --debug                      show debug logs",
 		"    -h, --help                       show this help message",
 		"",
 	}
@@ -144,6 +148,7 @@ func (a App) printListHelp() {
 		"    sloth list [<service-id>]",
 		"",
 		"OPTIONS",
+		"    -d, --debug  show debug logs",
 		"    -h, --help   show this help message",
 		"",
 	}

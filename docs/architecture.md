@@ -19,12 +19,13 @@ Sloth is a modular Go CLI organized around three runtime contracts:
 
 ## Backup Flow
 1. Resolve service definition from home service config or fallback local config.
-2. Resolve engine (`--engine`, configured engine, or autodetect by `container_name`).
+2. Resolve runtime (`--local`, `--engine`, configured engine, or autodetect by container name/service-id).
 3. Resolve module and generate backup artifact in temp directory.
 4. Resolve storage and compute object key:
    - Native versioning: `<base>/<service>/<artifact>`
    - Non-native versioning: `<base>/<service>/<version>/<artifact>`
 5. Upload artifact and persist `last_backup_time` in service config.
+6. Log major actions at `info` level; emit external command and storage API detail at `debug` level.
 
 ## Restore Flow
 - Stage 1 (`restore <service-id> [--version]`): download backup object to CWD.

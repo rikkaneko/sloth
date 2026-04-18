@@ -12,6 +12,7 @@ import (
 
 	"sloth/internal/config"
 	"sloth/internal/storage"
+	"sloth/internal/ui"
 )
 
 type Provider struct {
@@ -47,7 +48,8 @@ func (p *Provider) Put(ctx context.Context, key string, localPath string) error 
 	}
 	defer file.Close()
 
-	_, err = p.client.PutObject(ctx, &awss3.PutObjectInput{
+	ui.Debugf("s3::PutObject {bucket:%q, key:%q, file:%q}", p.bucket, key, localPath)
+	output, err := p.client.PutObject(ctx, &awss3.PutObjectInput{
 		Bucket: aws.String(p.bucket),
 		Key:    aws.String(key),
 		Body:   file,
@@ -55,6 +57,11 @@ func (p *Provider) Put(ctx context.Context, key string, localPath string) error 
 	if err != nil {
 		return fmt.Errorf("put object %s: %w", key, err)
 	}
+	ui.Debugf(
+		"s3::PutObject response {etag:%q, version_id:%q}",
+		aws.ToString(output.ETag),
+		aws.ToString(output.VersionId),
+	)
 
 	return nil
 }
@@ -68,11 +75,13 @@ func (p *Provider) Get(ctx context.Context, key string, versionID string, localP
 		input.VersionId = aws.String(versionID)
 	}
 
+	ui.Debugf("s3::GetObject {bucket:%q, key:%q, version_id:%q, dest:%q}", p.bucket, key, versionID, localPath)
 	output, err := p.client.GetObject(ctx, input)
 	if err != nil {
 		return fmt.Errorf("get object %s: %w", key, err)
 	}
 	defer output.Body.Close()
+	ui.Debugf("s3::GetObject response {content_length:%d}", output.ContentLength)
 
 	file, err := os.Create(localPath)
 	if err != nil {
@@ -88,6 +97,7 @@ func (p *Provider) Get(ctx context.Context, key string, versionID string, localP
 }
 
 func (p *Provider) ListObjects(ctx context.Context, prefix string) ([]storage.ObjectInfo, error) {
+	ui.Debugf("s3::ListObjectsV2 {bucket:%q, prefix:%q}", p.bucket, prefix)
 	paginator := awss3.NewListObjectsV2Paginator(p.client, &awss3.ListObjectsV2Input{
 		Bucket: aws.String(p.bucket),
 		Prefix: aws.String(prefix),
@@ -99,6 +109,7 @@ func (p *Provider) ListObjects(ctx context.Context, prefix string) ([]storage.Ob
 		if err != nil {
 			return nil, fmt.Errorf("list objects: %w", err)
 		}
+		ui.Debugf("s3::ListObjectsV2 page response {key_count:%d, truncated:%t}", aws.ToInt32(page.KeyCount), page.IsTruncated)
 		for _, obj := range page.Contents {
 			info := storage.ObjectInfo{Key: aws.ToString(obj.Key), Size: aws.ToInt64(obj.Size)}
 			if obj.LastModified != nil {
@@ -107,11 +118,13 @@ func (p *Provider) ListObjects(ctx context.Context, prefix string) ([]storage.Ob
 			objects = append(objects, info)
 		}
 	}
+	ui.Debugf("s3::ListObjectsV2 result {objects:%d}", len(objects))
 
 	return objects, nil
 }
 
 func (p *Provider) ListObjectVersions(ctx context.Context, prefix string) ([]storage.ObjectInfo, error) {
+	ui.Debugf("s3::ListObjectVersions {bucket:%q, prefix:%q}", p.bucket, prefix)
 	paginator := awss3.NewListObjectVersionsPaginator(p.client, &awss3.ListObjectVersionsInput{
 		Bucket: aws.String(p.bucket),
 		Prefix: aws.String(prefix),
@@ -123,6 +136,7 @@ func (p *Provider) ListObjectVersions(ctx context.Context, prefix string) ([]sto
 		if err != nil {
 			return nil, fmt.Errorf("list object versions: %w", err)
 		}
+		ui.Debugf("s3::ListObjectVersions page response {versions:%d, truncated:%t}", len(page.Versions), page.IsTruncated)
 		for _, version := range page.Versions {
 			info := storage.ObjectInfo{
 				Key:       aws.ToString(version.Key),
@@ -135,6 +149,7 @@ func (p *Provider) ListObjectVersions(ctx context.Context, prefix string) ([]sto
 			versions = append(versions, info)
 		}
 	}
+	ui.Debugf("s3::ListObjectVersions result {versions:%d}", len(versions))
 
 	return versions, nil
 }

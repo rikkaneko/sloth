@@ -17,36 +17,44 @@ Behavior:
 
 ## backup
 ```bash
-sloth backup <service-id> [--type <service-type> --container-name <container-name> --engine <docker|podman|local> --storage <storage-name> --env <env-file> --module-config <yaml> --volume-name <name> --volume-names <n1,n2>]
+sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <container-name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-n|--volume-name <name>] [-N|--volume-names <n1,n2>] [-d|--debug]
 ```
 
 Behavior:
-- If service is missing and `--type` + `--container-name` are provided, sloth writes `./.sloth.yaml` with the new service entry.
-- If `--engine` is omitted, sloth checks `podman` then `docker` by `container_name`.
-- Supported engines: `docker`, `podman`, `local`.
+- If service is missing and `--type` is provided, sloth writes `./.sloth.yaml` with the new service entry.
+- If `--container-name` is omitted, sloth probes containers by `<service-id>`.
+- If `--engine` is omitted, sloth checks `podman` then `docker`.
+- Supported `--engine` values: `docker`, `podman`.
+- Local mode is explicit via `--local` (do not use `--engine local`).
+- `--debug` shows external command output and S3 request/response summaries.
+- After backup upload completes, output prints the same backup table format as `sloth list <service-id>`.
 
 ## list
 ```bash
-sloth list [<service-id>]
+sloth list [<service-id>] [-d|--debug]
 ```
 
 Behavior:
-- Without `<service-id>`: lists configured services.
-- With `<service-id>`: lists backup objects/versions for that service.
+- Without `<service-id>`: lists configured services using columns `service`, `type`, `storage`, `last_backup`.
+- Empty service storage values are rendered as `default`.
+- With `<service-id>`: lists backup objects/versions for that service using the same solid-border table style.
+- `--debug` shows storage API call details.
 
 ## restore stage 1 (retrieve)
 ```bash
-sloth restore <service-id> [--version <version-id|latest>] [--type <type> --container-name <name> --engine <engine> --storage <storage-name> --env <env-file> --module-config <yaml>]
+sloth restore <service-id> [-v|--version <version-id|latest>] [-t|--type <type>] [-c|--container-name <name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-d|--debug]
 ```
 
 Behavior:
 - Downloads backup artifact to current directory.
 - File naming format: `<service-id>-backup-<backup-time>-<version>.<suffix>`.
 - Prints operator guidance for container and volume cleanup before apply.
+- Local mode is explicit via `--local`.
+- `--debug` shows storage API call details.
 
 ## restore stage 2 (apply)
 ```bash
-sloth restore <service-id> --apply <backup-data-file> [--type <type> --container-name <name> --engine <engine> --storage <storage-name> --env <env-file> --module-config <yaml>]
+sloth restore <service-id> -a|--apply <backup-data-file> [-t|--type <type>] [-c|--container-name <name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-d|--debug]
 ```
 
 Behavior:

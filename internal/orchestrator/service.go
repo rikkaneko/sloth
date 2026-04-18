@@ -3,10 +3,12 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"sloth/internal/modules"
 	"sloth/internal/storage"
 	s3storage "sloth/internal/storage/s3"
+	"sloth/internal/ui"
 	"sloth/internal/versioning"
 )
 
@@ -63,6 +66,7 @@ type BackupOptions struct {
 	Type          string
 	ContainerName string
 	Engine        string
+	Local         bool
 	Storage       string
 	EnvFile       string
 	ModuleConfig  string
@@ -96,6 +100,7 @@ type RestoreRetrieveOptions struct {
 	Type          string
 	ContainerName string
 	Engine        string
+	Local         bool
 	Storage       string
 	EnvFile       string
 	ModuleConfig  string
@@ -114,6 +119,7 @@ type RestoreApplyOptions struct {
 	Type          string
 	ContainerName string
 	Engine        string
+	Local         bool
 	Storage       string
 	EnvFile       string
 	ModuleConfig  string
@@ -138,6 +144,7 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		Type:          options.Type,
 		ContainerName: options.ContainerName,
 		Engine:        options.Engine,
+		Local:         options.Local,
 		Storage:       options.Storage,
 		EnvFile:       options.EnvFile,
 		ModuleConfig:  options.ModuleConfig,
@@ -149,10 +156,25 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		return BackupOutcome{}, err
 	}
 
-	engine, err := container.ResolveEngine(ctx, options.Engine, resolved.Service.Engine, resolved.Service.ContainerName)
+	resolution, err := container.ResolveEngine(
+		ctx,
+		options.Engine,
+		resolved.Service.Engine,
+		options.ContainerName,
+		resolved.Service.ContainerName,
+		resolved.Service.Name,
+		options.Local,
+	)
 	if err != nil {
 		return BackupOutcome{}, err
 	}
+	engine := resolution.Engine
+	if resolution.ContainerName != "" {
+		resolved.Service.ContainerName = resolution.ContainerName
+	}
+
+	ui.Infof("Found service %s%s [%s]", resolved.Service.Name, renderContainerSuffix(resolved.Service.Name, resolved.Service.ContainerName), engine.Name())
+	ui.Infof("Running %s modules for %s ...", resolved.Service.Type, resolved.Service.Name)
 
 	envMap, err := m.loadEnv(resolved.Service, options.EnvFile)
 	if err != nil {
@@ -179,6 +201,12 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 	if err != nil {
 		return BackupOutcome{}, err
 	}
+
+	fileInfo, err := os.Stat(backupResult.LocalPath)
+	if err != nil {
+		return BackupOutcome{}, fmt.Errorf("stat backup artifact: %w", err)
+	}
+	ui.Infof("Created backup file for %s (%s)", resolved.Service.Name, humanReadableSize(fileInfo.Size()))
 
 	storageConfigName := resolved.Service.Storage
 	if options.Storage != "" {
@@ -215,9 +243,11 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		objectKey = path.Join(servicePrefix, version, backupResult.ArtifactName)
 	}
 
+	ui.Infof("Uploading backup to %s (Version %s) ...", storageConfigName, version)
 	if err := provider.Put(ctx, objectKey, backupResult.LocalPath); err != nil {
 		return BackupOutcome{}, err
 	}
+	ui.Infof("Uploaded")
 
 	resolved.Service.LastBackupTime = m.now().Format(time.RFC3339)
 	if err := saveServiceResolution(resolved); err != nil {
@@ -318,6 +348,7 @@ func (m Manager) RestoreRetrieve(ctx context.Context, options RestoreRetrieveOpt
 		Type:          options.Type,
 		ContainerName: options.ContainerName,
 		Engine:        options.Engine,
+		Local:         options.Local,
 		Storage:       options.Storage,
 		EnvFile:       options.EnvFile,
 		ModuleConfig:  options.ModuleConfig,
@@ -450,6 +481,7 @@ func (m Manager) RestoreApply(ctx context.Context, options RestoreApplyOptions) 
 		Type:          options.Type,
 		ContainerName: options.ContainerName,
 		Engine:        options.Engine,
+		Local:         options.Local,
 		Storage:       options.Storage,
 		EnvFile:       options.EnvFile,
 		ModuleConfig:  options.ModuleConfig,
@@ -459,10 +491,25 @@ func (m Manager) RestoreApply(ctx context.Context, options RestoreApplyOptions) 
 		return RestoreApplyOutcome{}, err
 	}
 
-	engine, err := container.ResolveEngine(ctx, options.Engine, resolved.Service.Engine, resolved.Service.ContainerName)
+	resolution, err := container.ResolveEngine(
+		ctx,
+		options.Engine,
+		resolved.Service.Engine,
+		options.ContainerName,
+		resolved.Service.ContainerName,
+		resolved.Service.Name,
+		options.Local,
+	)
 	if err != nil {
 		return RestoreApplyOutcome{}, err
 	}
+	engine := resolution.Engine
+	if resolution.ContainerName != "" {
+		resolved.Service.ContainerName = resolution.ContainerName
+	}
+
+	ui.Infof("Found service %s%s [%s]", resolved.Service.Name, renderContainerSuffix(resolved.Service.Name, resolved.Service.ContainerName), engine.Name())
+	ui.Infof("Running %s modules for %s ...", resolved.Service.Type, resolved.Service.Name)
 
 	envMap, err := m.loadEnv(resolved.Service, options.EnvFile)
 	if err != nil {
@@ -508,6 +555,7 @@ type serviceResolutionOptions struct {
 	Type          string
 	ContainerName string
 	Engine        string
+	Local         bool
 	Storage       string
 	EnvFile       string
 	ModuleConfig  string
@@ -534,15 +582,20 @@ func resolveServiceForOperation(serviceID string, options serviceResolutionOptio
 		if !options.AllowCreate {
 			return resolvedService{}, fmt.Errorf("service %q not found", serviceID)
 		}
-		if strings.TrimSpace(options.Type) == "" || strings.TrimSpace(options.ContainerName) == "" {
-			return resolvedService{}, fmt.Errorf("service %q not found; provide --type and --container-name to create local .sloth.yaml entry", serviceID)
+		if strings.TrimSpace(options.Type) == "" {
+			return resolvedService{}, fmt.Errorf("service %q not found; provide --type to create local .sloth.yaml entry", serviceID)
+		}
+
+		engineName := options.Engine
+		if options.Local {
+			engineName = "local"
 		}
 
 		current = config.ServiceEntry{
 			Name:          serviceID,
 			Type:          options.Type,
 			ContainerName: options.ContainerName,
-			Engine:        options.Engine,
+			Engine:        engineName,
 			Storage:       options.Storage,
 			EnvFile:       options.EnvFile,
 			ModuleConfig:  options.ModuleConfig,
@@ -567,6 +620,9 @@ func resolveServiceForOperation(serviceID string, options serviceResolutionOptio
 	}
 	if options.Engine != "" {
 		current.Engine = options.Engine
+	}
+	if options.Local {
+		current.Engine = "local"
 	}
 	if options.Storage != "" {
 		current.Storage = options.Storage
@@ -600,6 +656,30 @@ func saveServiceResolution(resolved resolvedService) error {
 	}
 	resolved.Config.Service[resolved.ServiceIndex] = resolved.Service
 	return config.SaveServiceConfig(resolved.ConfigSource, resolved.Config)
+}
+
+func renderContainerSuffix(serviceID string, containerName string) string {
+	trimmed := strings.TrimSpace(containerName)
+	if trimmed == "" || trimmed == serviceID {
+		return ""
+	}
+	return fmt.Sprintf(" (%s)", trimmed)
+}
+
+func humanReadableSize(size int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	value := float64(size)
+	index := 0
+	for value >= 1024 && index < len(units)-1 {
+		value /= 1024
+		index++
+	}
+
+	if index == 0 {
+		return fmt.Sprintf("%d %s", size, units[index])
+	}
+	value = math.Round(value*10) / 10
+	return fmt.Sprintf("%s %s", strconv.FormatFloat(value, 'f', 1, 64), units[index])
 }
 
 func artifactExtension(fileName string) string {

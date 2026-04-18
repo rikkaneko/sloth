@@ -3,39 +3,84 @@ package container
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
-func ResolveEngine(ctx context.Context, explicit string, configured string, containerName string) (Engine, error) {
-	chosen := explicit
-	if chosen == "" {
-		chosen = configured
+type Resolution struct {
+	Engine        Engine
+	ContainerName string
+}
+
+var engineFactory = NewEngine
+
+func ResolveEngine(
+	ctx context.Context,
+	explicitEngine string,
+	configuredEngine string,
+	explicitContainerName string,
+	configuredContainerName string,
+	serviceID string,
+	forceLocal bool,
+) (Resolution, error) {
+	if forceLocal {
+		engine, err := engineFactory("local")
+		if err != nil {
+			return Resolution{}, err
+		}
+		return Resolution{Engine: engine}, nil
 	}
 
+	chosen := strings.TrimSpace(explicitEngine)
+	if chosen == "local" {
+		return Resolution{}, fmt.Errorf("use --local instead of --engine local")
+	}
+	if chosen == "" {
+		chosen = strings.TrimSpace(configuredEngine)
+	}
+	containerName := chooseContainerName(explicitContainerName, configuredContainerName, serviceID)
+
 	if chosen != "" {
-		engine, err := NewEngine(chosen)
+		engine, err := engineFactory(chosen)
 		if err != nil {
-			return nil, err
+			return Resolution{}, err
 		}
-		return engine, nil
+		return Resolution{
+			Engine:        engine,
+			ContainerName: containerName,
+		}, nil
 	}
 
 	if containerName == "" {
-		return nil, fmt.Errorf("container_name is required for engine auto-detection")
+		return Resolution{}, fmt.Errorf("container_name is required for engine auto-detection")
 	}
 
 	for _, candidate := range []string{"podman", "docker"} {
-		engine, err := NewEngine(candidate)
+		engine, err := engineFactory(candidate)
 		if err != nil {
-			return nil, err
+			return Resolution{}, err
 		}
 		exists, err := engine.ContainerExists(ctx, containerName)
 		if err != nil {
-			return nil, err
+			return Resolution{}, err
 		}
 		if exists {
-			return engine, nil
+			return Resolution{
+				Engine:        engine,
+				ContainerName: containerName,
+			}, nil
 		}
 	}
 
-	return nil, fmt.Errorf("unable to detect engine: container %q not found in podman or docker", containerName)
+	return Resolution{}, fmt.Errorf("unable to detect engine: container %q not found in podman or docker", containerName)
+}
+
+func chooseContainerName(explicitContainerName string, configuredContainerName string, serviceID string) string {
+	candidates := []string{explicitContainerName, configuredContainerName, serviceID}
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

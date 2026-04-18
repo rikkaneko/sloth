@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -11,12 +12,43 @@ const (
 	colorGreen  = "\033[32m"
 	colorYellow = "\033[33m"
 	colorRed    = "\033[31m"
+	colorCyan   = "\033[36m"
 )
 
 type Logger struct{}
 
+var debugEnabled atomic.Bool
+
 func NewLogger() Logger {
 	return Logger{}
+}
+
+func SetDebug(enabled bool) {
+	debugEnabled.Store(enabled)
+}
+
+func DebugEnabled() bool {
+	return debugEnabled.Load()
+}
+
+func Infof(format string, args ...interface{}) {
+	NewLogger().Infof(format, args...)
+}
+
+func Successf(format string, args ...interface{}) {
+	NewLogger().Successf(format, args...)
+}
+
+func Warnf(format string, args ...interface{}) {
+	NewLogger().Warnf(format, args...)
+}
+
+func Errorf(format string, args ...interface{}) {
+	NewLogger().Errorf(format, args...)
+}
+
+func Debugf(format string, args ...interface{}) {
+	NewLogger().Debugf(format, args...)
 }
 
 func (Logger) Infof(format string, args ...interface{}) {
@@ -33,6 +65,13 @@ func (Logger) Warnf(format string, args ...interface{}) {
 
 func (Logger) Errorf(format string, args ...interface{}) {
 	fmt.Printf(colorRed+"[error] "+format+colorReset+"\n", args...)
+}
+
+func (Logger) Debugf(format string, args ...interface{}) {
+	if !DebugEnabled() {
+		return
+	}
+	fmt.Printf(colorCyan+"[debug] "+format+colorReset+"\n", args...)
 }
 
 func PrintTable(headers []string, rows [][]string) {
@@ -58,6 +97,7 @@ func PrintTable(headers []string, rows [][]string) {
 	for _, row := range rows {
 		fmt.Println(formatRow(row, widths))
 	}
+	fmt.Println()
 }
 
 func PrintSolidTable(headers []string, rows [][]string) {
@@ -81,6 +121,7 @@ func PrintSolidTable(headers []string, rows [][]string) {
 		fmt.Println(formatSolidRow(row, widths))
 	}
 	fmt.Println(topBorder)
+	fmt.Println()
 }
 
 func formatRow(values []string, widths []int) string {

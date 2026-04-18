@@ -3,7 +3,6 @@ package modules
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -54,7 +53,7 @@ func (m VolumeModule) Backup(ctx context.Context, req BackupRequest) (BackupResu
 		shellQuote(outputPath),
 	)
 
-	if err := container.RunHostShell(ctx, archiveCommand, req.Env, nil, os.Stdout, os.Stderr); err != nil {
+	if err := container.RunHostShell(ctx, archiveCommand, req.Env, nil, nil, nil); err != nil {
 		return BackupResult{}, fmt.Errorf("archive volume backup: %w", err)
 	}
 
@@ -87,7 +86,7 @@ func (m VolumeModule) Restore(ctx context.Context, req RestoreRequest) (RestoreR
 		strings.Join(mountFlags, " "),
 	)
 
-	if err := container.RunHostShell(ctx, restoreCommand, req.Env, nil, os.Stdout, os.Stderr); err != nil {
+	if err := container.RunHostShell(ctx, restoreCommand, req.Env, nil, nil, nil); err != nil {
 		return RestoreResult{}, fmt.Errorf("restore volume archive: %w", err)
 	}
 

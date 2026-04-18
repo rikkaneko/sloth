@@ -50,7 +50,7 @@ func TestRunRootHelpWithDynamicValues(t *testing.T) {
 	assertContains(t, output, "Default compiled-in and discovered parameters:")
 	assertContains(t, output, "Available service types:")
 	assertContains(t, output, "volume")
-	assertContains(t, output, "Available container engines: docker, podman, local")
+	assertContains(t, output, "Available container engines: docker, podman")
 	assertContains(t, output, "archive")
 	assertContains(t, output, "default")
 }
@@ -65,7 +65,9 @@ func TestRunBackupHelpWithoutServiceID(t *testing.T) {
 	}
 
 	assertContains(t, output, "sloth backup <service-id> [options]")
-	assertContains(t, output, "--type <service-type>")
+	assertContains(t, output, "-t, --type <service-type>")
+	assertContains(t, output, "-l, --local")
+	assertContains(t, output, "-d, --debug")
 	assertContains(t, output, "available:")
 }
 
@@ -79,7 +81,7 @@ func TestRunHelpSubcommandForRestore(t *testing.T) {
 	}
 
 	assertContains(t, output, "sloth restore <service-id>")
-	assertContains(t, output, "--engine <container-engine>")
+	assertContains(t, output, "-E, --engine <container-engine>")
 }
 
 func TestRunRootHelpGracefulWhenStorageConfigMissing(t *testing.T) {

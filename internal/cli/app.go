@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -13,16 +15,20 @@ import (
 )
 
 type App struct {
-	manager orchestrator.Manager
+	manager manager
 	logger  ui.Logger
 	version string
 }
 
+type manager interface {
+	Backup(ctx context.Context, options orchestrator.BackupOptions) (orchestrator.BackupOutcome, error)
+	List(ctx context.Context, serviceID string) (orchestrator.ListOutcome, error)
+	RestoreRetrieve(ctx context.Context, options orchestrator.RestoreRetrieveOptions) (orchestrator.RestoreRetrieveOutcome, error)
+	RestoreApply(ctx context.Context, options orchestrator.RestoreApplyOptions) (orchestrator.RestoreApplyOutcome, error)
+}
+
 func NewApp(version string) App {
-	normalizedVersion := strings.TrimSpace(version)
-	if normalizedVersion == "" {
-		normalizedVersion = "dev"
-	}
+	normalizedVersion := resolveDisplayVersion(version)
 
 	return App{
 		manager: orchestrator.NewManager(),
@@ -85,48 +91,92 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 	flagSet := flag.NewFlagSet("backup", flag.ContinueOnError)
 	flagSet.SetOutput(os.Stdout)
 
-	typeValue := flagSet.String("type", "", "service type")
-	containerName := flagSet.String("container-name", "", "container name")
-	engine := flagSet.String("engine", "", "engine name: docker|podman|local")
-	storageName := flagSet.String("storage", "", "storage config name")
-	envFile := flagSet.String("env", "", "env file path")
-	moduleConfig := flagSet.String("module-config", "", "module override yaml path")
-	volumeName := flagSet.String("volume-name", "", "single volume name for type=volume")
-	volumeNamesRaw := flagSet.String("volume-names", "", "comma separated volume names for type=volume")
+	var typeValue string
+	var containerName string
+	var engine string
+	var local bool
+	var storageName string
+	var envFile string
+	var moduleConfig string
+	var volumeName string
+	var volumeNamesRaw string
+	var debugMode bool
+
+	flagSet.StringVar(&typeValue, "type", "", "service type")
+	flagSet.StringVar(&typeValue, "t", "", "service type")
+	flagSet.StringVar(&containerName, "container-name", "", "container name")
+	flagSet.StringVar(&containerName, "c", "", "container name")
+	flagSet.StringVar(&engine, "engine", "", "engine name: docker|podman")
+	flagSet.StringVar(&engine, "E", "", "engine name: docker|podman")
+	flagSet.BoolVar(&local, "local", false, "run in local mode")
+	flagSet.BoolVar(&local, "l", false, "run in local mode")
+	flagSet.StringVar(&storageName, "storage", "", "storage config name")
+	flagSet.StringVar(&storageName, "s", "", "storage config name")
+	flagSet.StringVar(&envFile, "env", "", "env file path")
+	flagSet.StringVar(&envFile, "e", "", "env file path")
+	flagSet.StringVar(&moduleConfig, "module-config", "", "module override yaml path")
+	flagSet.StringVar(&moduleConfig, "m", "", "module override yaml path")
+	flagSet.StringVar(&volumeName, "volume-name", "", "single volume name for type=volume")
+	flagSet.StringVar(&volumeName, "n", "", "single volume name for type=volume")
+	flagSet.StringVar(&volumeNamesRaw, "volume-names", "", "comma separated volume names for type=volume")
+	flagSet.StringVar(&volumeNamesRaw, "N", "", "comma separated volume names for type=volume")
+	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
+	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
 
 	if err := flagSet.Parse(args[1:]); err != nil {
 		return err
 	}
 
-	volumeNames := splitCSV(*volumeNamesRaw)
+	ui.SetDebug(debugMode)
+	if local && strings.TrimSpace(engine) != "" {
+		return fmt.Errorf("cannot use --local with --engine")
+	}
+	if strings.EqualFold(strings.TrimSpace(engine), "local") {
+		return fmt.Errorf("use --local instead of --engine local")
+	}
 
-	a.logger.Infof("Backing up service %s ...", serviceID)
+	volumeNames := splitCSV(volumeNamesRaw)
+
 	outcome, err := a.manager.Backup(ctx, orchestrator.BackupOptions{
 		ServiceID:     serviceID,
-		Type:          *typeValue,
-		ContainerName: *containerName,
-		Engine:        *engine,
-		Storage:       *storageName,
-		EnvFile:       *envFile,
-		ModuleConfig:  *moduleConfig,
-		VolumeName:    *volumeName,
+		Type:          typeValue,
+		ContainerName: containerName,
+		Engine:        engine,
+		Local:         local,
+		Storage:       storageName,
+		EnvFile:       envFile,
+		ModuleConfig:  moduleConfig,
+		VolumeName:    volumeName,
 		VolumeNames:   volumeNames,
 	})
 	if err != nil {
 		return err
 	}
 
-	a.logger.Successf("Backup uploaded")
-	fmt.Printf("service=%s engine=%s storage=%s version=%s\n", outcome.ServiceID, outcome.Engine, outcome.StorageName, outcome.Version)
-	fmt.Printf("object=%s\n", outcome.ObjectKey)
+	listOutcome, err := a.manager.List(ctx, outcome.ServiceID)
+	if err != nil {
+		return err
+	}
+	printBackupObjectsTable(listOutcome.Backups)
 	return nil
 }
 
 func (a App) runList(ctx context.Context, args []string) error {
 	serviceID := ""
-	if len(args) > 0 {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		serviceID = args[0]
+		args = args[1:]
 	}
+
+	flagSet := flag.NewFlagSet("list", flag.ContinueOnError)
+	flagSet.SetOutput(os.Stdout)
+	var debugMode bool
+	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
+	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
+	if err := flagSet.Parse(args); err != nil {
+		return err
+	}
+	ui.SetDebug(debugMode)
 
 	outcome, err := a.manager.List(ctx, serviceID)
 	if err != nil {
@@ -136,9 +186,13 @@ func (a App) runList(ctx context.Context, args []string) error {
 	if serviceID == "" {
 		rows := make([][]string, 0, len(outcome.Services))
 		for _, service := range outcome.Services {
-			rows = append(rows, []string{service.Name, service.Type, service.ContainerName, service.Storage, service.LastBackupTime})
+			storageName := strings.TrimSpace(service.Storage)
+			if storageName == "" {
+				storageName = "default"
+			}
+			rows = append(rows, []string{service.Name, service.Type, storageName, service.LastBackupTime})
 		}
-		ui.PrintSolidTable([]string{"service", "type", "container", "storage", "last_backup"}, rows)
+		ui.PrintSolidTable([]string{"service", "type", "storage", "last_backup"}, rows)
 		return nil
 	}
 
@@ -147,17 +201,7 @@ func (a App) runList(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	rows := make([][]string, 0, len(outcome.Backups))
-	for _, backup := range outcome.Backups {
-		rows = append(rows, []string{
-			backup.Version,
-			backup.LastModified.Format(time.RFC3339),
-			fmt.Sprintf("%d", backup.Size),
-			backup.Key,
-		})
-	}
-
-	ui.PrintTable([]string{"version", "last_modified", "size", "object_key"}, rows)
+	printBackupObjectsTable(outcome.Backups)
 	return nil
 }
 
@@ -170,30 +214,62 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 	flagSet := flag.NewFlagSet("restore", flag.ContinueOnError)
 	flagSet.SetOutput(os.Stdout)
 
-	versionValue := flagSet.String("version", "latest", "backup version id or latest")
-	applyFile := flagSet.String("apply", "", "apply a downloaded backup file")
-	typeValue := flagSet.String("type", "", "service type")
-	containerName := flagSet.String("container-name", "", "container name")
-	engine := flagSet.String("engine", "", "engine name: docker|podman|local")
-	storageName := flagSet.String("storage", "", "storage config name")
-	envFile := flagSet.String("env", "", "env file path")
-	moduleConfig := flagSet.String("module-config", "", "module override yaml path")
+	var versionValue string
+	var applyFile string
+	var typeValue string
+	var containerName string
+	var engine string
+	var local bool
+	var storageName string
+	var envFile string
+	var moduleConfig string
+	var debugMode bool
+
+	flagSet.StringVar(&versionValue, "version", "latest", "backup version id or latest")
+	flagSet.StringVar(&versionValue, "v", "latest", "backup version id or latest")
+	flagSet.StringVar(&applyFile, "apply", "", "apply a downloaded backup file")
+	flagSet.StringVar(&applyFile, "a", "", "apply a downloaded backup file")
+	flagSet.StringVar(&typeValue, "type", "", "service type")
+	flagSet.StringVar(&typeValue, "t", "", "service type")
+	flagSet.StringVar(&containerName, "container-name", "", "container name")
+	flagSet.StringVar(&containerName, "c", "", "container name")
+	flagSet.StringVar(&engine, "engine", "", "engine name: docker|podman")
+	flagSet.StringVar(&engine, "E", "", "engine name: docker|podman")
+	flagSet.BoolVar(&local, "local", false, "run in local mode")
+	flagSet.BoolVar(&local, "l", false, "run in local mode")
+	flagSet.StringVar(&storageName, "storage", "", "storage config name")
+	flagSet.StringVar(&storageName, "s", "", "storage config name")
+	flagSet.StringVar(&envFile, "env", "", "env file path")
+	flagSet.StringVar(&envFile, "e", "", "env file path")
+	flagSet.StringVar(&moduleConfig, "module-config", "", "module override yaml path")
+	flagSet.StringVar(&moduleConfig, "m", "", "module override yaml path")
+	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
+	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
 
 	if err := flagSet.Parse(args[1:]); err != nil {
 		return err
 	}
 
-	if *applyFile != "" {
-		a.logger.Infof("Applying backup %s to service %s ...", *applyFile, serviceID)
+	ui.SetDebug(debugMode)
+	if local && strings.TrimSpace(engine) != "" {
+		return fmt.Errorf("cannot use --local with --engine")
+	}
+	if strings.EqualFold(strings.TrimSpace(engine), "local") {
+		return fmt.Errorf("use --local instead of --engine local")
+	}
+
+	if applyFile != "" {
+		a.logger.Infof("Applying backup %s to service %s ...", applyFile, serviceID)
 		outcome, err := a.manager.RestoreApply(ctx, orchestrator.RestoreApplyOptions{
 			ServiceID:     serviceID,
-			BackupFile:    *applyFile,
-			Type:          *typeValue,
-			ContainerName: *containerName,
-			Engine:        *engine,
-			Storage:       *storageName,
-			EnvFile:       *envFile,
-			ModuleConfig:  *moduleConfig,
+			BackupFile:    applyFile,
+			Type:          typeValue,
+			ContainerName: containerName,
+			Engine:        engine,
+			Local:         local,
+			Storage:       storageName,
+			EnvFile:       envFile,
+			ModuleConfig:  moduleConfig,
 		})
 		if err != nil {
 			return err
@@ -208,13 +284,14 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 	a.logger.Infof("Retrieving backup for service %s ...", serviceID)
 	outcome, err := a.manager.RestoreRetrieve(ctx, orchestrator.RestoreRetrieveOptions{
 		ServiceID:     serviceID,
-		Version:       *versionValue,
-		Type:          *typeValue,
-		ContainerName: *containerName,
-		Engine:        *engine,
-		Storage:       *storageName,
-		EnvFile:       *envFile,
-		ModuleConfig:  *moduleConfig,
+		Version:       versionValue,
+		Type:          typeValue,
+		ContainerName: containerName,
+		Engine:        engine,
+		Local:         local,
+		Storage:       storageName,
+		EnvFile:       envFile,
+		ModuleConfig:  moduleConfig,
 	})
 	if err != nil {
 		return err
@@ -229,7 +306,7 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 
 func (a App) printBanner() {
 	fmt.Println("Copyright (c) rikkaneko <rikkaneko23@gmail.com>")
-	fmt.Printf("Sloth CLI (version %s)\n\n", a.version)
+	fmt.Printf("Sloth CLI (version %s, go %s)\n\n", a.version, runtime.Version())
 }
 
 func splitCSV(raw string) []string {
@@ -255,4 +332,50 @@ func ExitWithError(err error) {
 	}
 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
+}
+
+func printBackupObjectsTable(backups []orchestrator.BackupObject) {
+	rows := make([][]string, 0, len(backups))
+	for _, backup := range backups {
+		rows = append(rows, []string{
+			backup.Version,
+			backup.LastModified.Format(time.RFC3339),
+			fmt.Sprintf("%d", backup.Size),
+			backup.Key,
+		})
+	}
+	ui.PrintSolidTable([]string{"version", "last_modified", "size", "object_key"}, rows)
+}
+
+func resolveDisplayVersion(version string) string {
+	normalized := strings.TrimSpace(version)
+	if normalized != "" && normalized != "dev" {
+		return normalized
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if ok {
+		buildVersion := strings.TrimSpace(info.Main.Version)
+		if buildVersion != "" && buildVersion != "(devel)" {
+			return buildVersion
+		}
+		revision := ""
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				revision = strings.TrimSpace(setting.Value)
+				break
+			}
+		}
+		if revision != "" {
+			if len(revision) > 12 {
+				return revision[:12]
+			}
+			return revision
+		}
+	}
+
+	if normalized == "" {
+		return "dev"
+	}
+	return normalized
 }

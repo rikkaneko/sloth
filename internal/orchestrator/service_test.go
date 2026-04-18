@@ -204,7 +204,7 @@ func TestBackupNonNativeUsesIncrementedVersion(t *testing.T) {
 		ServiceID:     "app",
 		Type:          "mysql",
 		ContainerName: "app-db",
-		Engine:        "local",
+		Local:         true,
 	})
 	if err != nil {
 		t.Fatalf("backup: %v", err)

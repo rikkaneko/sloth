@@ -3,7 +3,6 @@ package modules
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -133,7 +132,7 @@ func runModuleCommands(ctx context.Context, req BackupRequest, commands []string
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
-		if err := req.Engine.Exec(ctx, req.Service.ContainerName, command, req.Env, nil, os.Stdout, os.Stderr); err != nil {
+		if err := req.Engine.Exec(ctx, req.Service.ContainerName, command, req.Env, nil, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -145,7 +144,7 @@ func runModuleRestoreCommands(ctx context.Context, req RestoreRequest, commands 
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
-		if err := req.Engine.Exec(ctx, req.Service.ContainerName, command, req.Env, nil, os.Stdout, os.Stderr); err != nil {
+		if err := req.Engine.Exec(ctx, req.Service.ContainerName, command, req.Env, nil, nil, nil); err != nil {
 			return err
 		}
 	}
