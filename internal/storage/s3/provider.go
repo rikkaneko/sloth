@@ -2,6 +2,8 @@ package s3
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -18,8 +20,13 @@ import (
 
 type Provider struct {
 	client           *awss3.Client
+	putObjectClient  putObjectClient
 	headObjectClient headObjectClient
 	bucket           string
+}
+
+type putObjectClient interface {
+	PutObject(ctx context.Context, params *awss3.PutObjectInput, optFns ...func(*awss3.Options)) (*awss3.PutObjectOutput, error)
 }
 
 type headObjectClient interface {
@@ -46,23 +53,31 @@ func NewProvider(cfg config.StorageConfig) (*Provider, error) {
 
 	return &Provider{
 		client:           client,
+		putObjectClient:  client,
 		headObjectClient: client,
 		bucket:           cfg.Bucket,
 	}, nil
 }
 
 func (p *Provider) Put(ctx context.Context, key string, localPath string) error {
+	checksumSHA256, err := checksumFileSHA256Base64(localPath)
+	if err != nil {
+		return fmt.Errorf("calculate backup artifact checksum: %w", err)
+	}
+
 	file, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("open backup artifact: %w", err)
 	}
 	defer file.Close()
 
-	ui.Debugf("s3::PutObject {bucket:%q, key:%q, file:%q}", p.bucket, key, localPath)
-	output, err := p.client.PutObject(ctx, &awss3.PutObjectInput{
-		Bucket: aws.String(p.bucket),
-		Key:    aws.String(key),
-		Body:   file,
+	ui.Debugf("s3::PutObject {bucket:%q, key:%q, file:%q, checksum_sha256:%q}", p.bucket, key, localPath, checksumSHA256)
+	output, err := p.putObjectClient.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:            aws.String(p.bucket),
+		Key:               aws.String(key),
+		Body:              file,
+		ChecksumSHA256:    aws.String(checksumSHA256),
+		ChecksumAlgorithm: awss3types.ChecksumAlgorithmSha256,
 	})
 	if err != nil {
 		return fmt.Errorf("put object %s: %w", key, err)
@@ -186,4 +201,18 @@ func (p *Provider) HeadObject(ctx context.Context, key string, versionID string)
 	}
 	ui.Debugf("s3::HeadObject response {content_length:%d, checksum_sha256:%q}", metadata.Size, metadata.ChecksumSHA256)
 	return metadata, nil
+}
+
+func checksumFileSHA256Base64(localPath string) (string, error) {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("open backup artifact for checksum: %w", err)
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", fmt.Errorf("read backup artifact for checksum: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(hasher.Sum(nil)), nil
 }

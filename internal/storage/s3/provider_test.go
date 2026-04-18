@@ -2,11 +2,39 @@ package s3
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	awss3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+type fakePutObjectClient struct {
+	lastInput *awss3.PutObjectInput
+	bodyBytes []byte
+	output    *awss3.PutObjectOutput
+	err       error
+}
+
+func (f *fakePutObjectClient) PutObject(
+	ctx context.Context,
+	params *awss3.PutObjectInput,
+	optFns ...func(*awss3.Options),
+) (*awss3.PutObjectOutput, error) {
+	f.lastInput = params
+	if params != nil && params.Body != nil {
+		bodyBytes, err := io.ReadAll(params.Body)
+		if err != nil {
+			return nil, err
+		}
+		f.bodyBytes = bodyBytes
+	}
+	return f.output, f.err
+}
 
 type fakeHeadObjectClient struct {
 	lastInput *awss3.HeadObjectInput
@@ -88,6 +116,53 @@ func TestHeadObjectWithoutVersionID(t *testing.T) {
 	if metadata.Size != 64 {
 		t.Fatalf("expected size 64, got %d", metadata.Size)
 	}
+}
+
+func TestPutObjectIncludesSHA256Checksum(t *testing.T) {
+	directory := t.TempDir()
+	localPath := filepath.Join(directory, "backup.sql")
+	content := []byte("backup-data-for-checksum")
+	if err := os.WriteFile(localPath, content, 0o600); err != nil {
+		t.Fatalf("write local backup file: %v", err)
+	}
+
+	client := &fakePutObjectClient{
+		output: &awss3.PutObjectOutput{},
+	}
+	provider := &Provider{
+		putObjectClient: client,
+		bucket:          "backup-bucket",
+	}
+
+	if err := provider.Put(context.Background(), "path/to/object.sql", localPath); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
+
+	if client.lastInput == nil {
+		t.Fatalf("expected put object input to be recorded")
+	}
+	if value := valueString(client.lastInput.Key); value != "path/to/object.sql" {
+		t.Fatalf("unexpected key: %q", value)
+	}
+	if value := valueString(client.lastInput.Bucket); value != "backup-bucket" {
+		t.Fatalf("unexpected bucket: %q", value)
+	}
+	if client.lastInput.ChecksumAlgorithm != awss3types.ChecksumAlgorithmSha256 {
+		t.Fatalf("expected checksum algorithm sha256, got %q", client.lastInput.ChecksumAlgorithm)
+	}
+	expectedChecksum := checksumSHA256Base64(content)
+	if value := valueString(client.lastInput.ChecksumSHA256); value != expectedChecksum {
+		t.Fatalf("unexpected checksum: %q", value)
+	}
+
+	if string(client.bodyBytes) != string(content) {
+		t.Fatalf("unexpected body content: %q", string(client.bodyBytes))
+	}
+}
+
+func checksumSHA256Base64(content []byte) string {
+	sum := sha256.Sum256(content)
+	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
 func int64Ptr(value int64) *int64 {
