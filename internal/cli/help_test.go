@@ -67,6 +67,9 @@ func TestRunBackupHelpWithoutServiceID(t *testing.T) {
 	assertContains(t, output, "sloth backup <service-id> [options]")
 	assertContains(t, output, "-t, --type <service-type>")
 	assertContains(t, output, "-l, --local")
+	assertContains(t, output, "--force")
+	assertContains(t, output, "--use-checksum")
+	assertContains(t, output, "--use-file-size-check")
 	assertContains(t, output, "-d, --debug")
 	assertContains(t, output, "available:")
 }
@@ -97,6 +100,18 @@ func TestRunRootHelpGracefulWhenStorageConfigMissing(t *testing.T) {
 	}
 
 	assertContains(t, output, "Available storage names: unavailable")
+}
+
+func TestRunListHelpIncludesShowObjectKey(t *testing.T) {
+	app := NewApp("test")
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list", "--help"})
+	})
+	if err != nil {
+		t.Fatalf("run list help: %v", err)
+	}
+
+	assertContains(t, output, "--show-object-key")
 }
 
 func TestRunHelpUnknownTopic(t *testing.T) {

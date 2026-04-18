@@ -82,7 +82,7 @@ func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	output, err := runWithCapturedStdout(t, func() error {
 		return app.Run(
 			context.Background(),
-			[]string{"backup", "svc", "-t", "mysql", "-c", "svc-db", "-E", "docker", "-s", "archive", "-e", ".env.local", "-m", "mod.yaml", "-d"},
+			[]string{"backup", "svc", "-t", "mysql", "-c", "svc-db", "-E", "docker", "-s", "archive", "-e", ".env.local", "-m", "mod.yaml", "--force", "--use-file-size-check", "--use-checksum", "-d"},
 		)
 	})
 	if err != nil {
@@ -92,9 +92,16 @@ func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	if manager.backupOptions.Type != "mysql" || manager.backupOptions.ContainerName != "svc-db" || manager.backupOptions.Engine != "docker" {
 		t.Fatalf("unexpected backup options: %+v", manager.backupOptions)
 	}
+	if !manager.backupOptions.UseChecksum || !manager.backupOptions.UseFileSize {
+		t.Fatalf("expected delta-check flags to be passed: %+v", manager.backupOptions)
+	}
+	if !manager.backupOptions.Force {
+		t.Fatalf("expected force flag to be passed: %+v", manager.backupOptions)
+	}
 	if !strings.Contains(output, "| version ") {
 		t.Fatalf("expected backup table output\n%s", output)
 	}
+	assertNotContains(t, output, "object_key")
 	assertNotContains(t, output, "service=")
 }
 
@@ -152,6 +159,36 @@ func TestRunListWithServiceIDUsesSolidTable(t *testing.T) {
 
 	assertContains(t, output, "+---------")
 	assertContains(t, output, "| version ")
+	assertContains(t, output, "128 B")
+	assertNotContains(t, output, "object_key")
+}
+
+func TestRunListWithServiceIDShowObjectKey(t *testing.T) {
+	manager := &fakeManager{
+		listOutcome: orchestrator.ListOutcome{
+			Backups: []orchestrator.BackupObject{
+				{
+					Key:          "backup/svc/1/svc.sql",
+					Version:      "1",
+					Size:         2048,
+					LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list", "svc", "--show-object-key"})
+	})
+	if err != nil {
+		t.Fatalf("run list service with object key: %v", err)
+	}
+
+	assertContains(t, output, "object_key")
+	assertContains(t, output, "backup/svc/1/svc.sql")
+	assertContains(t, output, "2.0 KB")
 }
 
 func assertNotContains(t *testing.T, output string, unexpected string) {

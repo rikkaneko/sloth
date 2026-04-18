@@ -17,7 +17,7 @@ Behavior:
 
 ## backup
 ```bash
-sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <container-name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-n|--volume-name <name>] [-N|--volume-names <n1,n2>] [-d|--debug]
+sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <container-name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-n|--volume-name <name>] [-N|--volume-names <n1,n2>] [--force] [--use-checksum] [--use-file-size-check] [-d|--debug]
 ```
 
 Behavior:
@@ -28,16 +28,24 @@ Behavior:
 - Local mode is explicit via `--local` (do not use `--engine local`).
 - `--debug` shows external command output and S3 request/response summaries.
 - After backup upload completes, output prints the same backup table format as `sloth list <service-id>`.
+- Delta check mode:
+  - Default: checksum.
+  - Config override: `common.file_delta_check: checksum|file_size`.
+  - Command overrides: `--use-checksum`, `--use-file-size-check`.
+  - `--force` bypasses all delta checks and always uploads a new backup version.
+  - Upload is skipped when any enabled check matches latest backup (`[info] Backup file is already up-to-date. Skipped.`).
 
 ## list
 ```bash
-sloth list [<service-id>] [-d|--debug]
+sloth list [<service-id>] [--show-object-key] [-d|--debug]
 ```
 
 Behavior:
 - Without `<service-id>`: lists configured services using columns `service`, `type`, `storage`, `last_backup`.
 - Empty service storage values are rendered as `default`.
 - With `<service-id>`: lists backup objects/versions for that service using the same solid-border table style.
+- Backup object `size` is rendered in human-readable format.
+- `object_key` is hidden by default; include `--show-object-key` to show it.
 - `--debug` shows storage API call details.
 
 ## restore stage 1 (retrieve)

@@ -90,3 +90,50 @@ func TestNormalizeBasePath(t *testing.T) {
 		t.Fatalf("expected backup for empty base path, got %s", got)
 	}
 }
+
+func TestMainConfigValidateAcceptsCommonFileDeltaCheck(t *testing.T) {
+	cfg := MainConfig{
+		Storage: []StorageConfig{
+			{
+				Name:            "default",
+				Type:            "s3",
+				Endpoint:        "https://example.com",
+				Bucket:          "backup",
+				AccessKeyID:     "key",
+				SecretAccessKey: "secret",
+			},
+		},
+		Common: CommonConfig{
+			FileDeltaCheck: "file_size",
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate main config: %v", err)
+	}
+	if cfg.ResolveFileDeltaCheck() != "file_size" {
+		t.Fatalf("expected file_size mode")
+	}
+}
+
+func TestMainConfigValidateRejectsInvalidCommonFileDeltaCheck(t *testing.T) {
+	cfg := MainConfig{
+		Storage: []StorageConfig{
+			{
+				Name:            "default",
+				Type:            "s3",
+				Endpoint:        "https://example.com",
+				Bucket:          "backup",
+				AccessKeyID:     "key",
+				SecretAccessKey: "secret",
+			},
+		},
+		Common: CommonConfig{
+			FileDeltaCheck: "invalid",
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid file_delta_check error")
+	}
+}

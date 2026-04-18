@@ -4,9 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,6 +102,9 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 	var moduleConfig string
 	var volumeName string
 	var volumeNamesRaw string
+	var force bool
+	var useChecksum bool
+	var useFileSizeCheck bool
 	var debugMode bool
 
 	flagSet.StringVar(&typeValue, "type", "", "service type")
@@ -120,6 +125,9 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 	flagSet.StringVar(&volumeName, "n", "", "single volume name for type=volume")
 	flagSet.StringVar(&volumeNamesRaw, "volume-names", "", "comma separated volume names for type=volume")
 	flagSet.StringVar(&volumeNamesRaw, "N", "", "comma separated volume names for type=volume")
+	flagSet.BoolVar(&force, "force", false, "force upload even when delta check matches")
+	flagSet.BoolVar(&useChecksum, "use-checksum", false, "enable checksum delta check")
+	flagSet.BoolVar(&useFileSizeCheck, "use-file-size-check", false, "enable file-size delta check")
 	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
 	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
 
@@ -143,6 +151,9 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 		ContainerName: containerName,
 		Engine:        engine,
 		Local:         local,
+		Force:         force,
+		UseChecksum:   useChecksum,
+		UseFileSize:   useFileSizeCheck,
 		Storage:       storageName,
 		EnvFile:       envFile,
 		ModuleConfig:  moduleConfig,
@@ -157,7 +168,7 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	printBackupObjectsTable(listOutcome.Backups)
+	printBackupObjectsTable(listOutcome.Backups, false)
 	return nil
 }
 
@@ -171,8 +182,10 @@ func (a App) runList(ctx context.Context, args []string) error {
 	flagSet := flag.NewFlagSet("list", flag.ContinueOnError)
 	flagSet.SetOutput(os.Stdout)
 	var debugMode bool
+	var showObjectKey bool
 	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
 	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
+	flagSet.BoolVar(&showObjectKey, "show-object-key", false, "show object_key column")
 	if err := flagSet.Parse(args); err != nil {
 		return err
 	}
@@ -201,7 +214,7 @@ func (a App) runList(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	printBackupObjectsTable(outcome.Backups)
+	printBackupObjectsTable(outcome.Backups, showObjectKey)
 	return nil
 }
 
@@ -334,17 +347,39 @@ func ExitWithError(err error) {
 	os.Exit(1)
 }
 
-func printBackupObjectsTable(backups []orchestrator.BackupObject) {
+func printBackupObjectsTable(backups []orchestrator.BackupObject, showObjectKey bool) {
+	headers := []string{"version", "last_modified", "size"}
 	rows := make([][]string, 0, len(backups))
 	for _, backup := range backups {
-		rows = append(rows, []string{
+		row := []string{
 			backup.Version,
 			backup.LastModified.Format(time.RFC3339),
-			fmt.Sprintf("%d", backup.Size),
-			backup.Key,
-		})
+			humanReadableBytes(backup.Size),
+		}
+		if showObjectKey {
+			row = append(row, backup.Key)
+		}
+		rows = append(rows, row)
 	}
-	ui.PrintSolidTable([]string{"version", "last_modified", "size", "object_key"}, rows)
+	if showObjectKey {
+		headers = append(headers, "object_key")
+	}
+	ui.PrintSolidTable(headers, rows)
+}
+
+func humanReadableBytes(size int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	value := float64(size)
+	index := 0
+	for value >= 1024 && index < len(units)-1 {
+		value /= 1024
+		index++
+	}
+	if index == 0 {
+		return fmt.Sprintf("%d %s", size, units[index])
+	}
+	value = math.Round(value*10) / 10
+	return fmt.Sprintf("%s %s", strconv.FormatFloat(value, 'f', 1, 64), units[index])
 }
 
 func resolveDisplayVersion(version string) string {

@@ -98,6 +98,9 @@ func (a App) printBackupHelp() {
 		"    -m, --module-config <yaml-path>  module override yaml path",
 		"    -n, --volume-name <volume-name>  single volume name for type=volume",
 		"    -N, --volume-names <n1,n2>       comma-separated volume names for type=volume",
+		"    --force                          force upload regardless of delta checks",
+		"    --use-checksum                   enable checksum delta check",
+		"    --use-file-size-check            enable file-size delta check",
 		"    -d, --debug                      show debug logs",
 		"    -h, --help                       show this help message",
 		"",
@@ -149,6 +152,7 @@ func (a App) printListHelp() {
 		"",
 		"OPTIONS",
 		"    -d, --debug  show debug logs",
+		"    --show-object-key  show object_key column for service backup list",
 		"    -h, --help   show this help message",
 		"",
 	}

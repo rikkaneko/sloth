@@ -36,6 +36,11 @@ type ServiceEntry struct {
 
 type MainConfig struct {
 	Storage []StorageConfig `yaml:"storage"`
+	Common  CommonConfig    `yaml:"common,omitempty"`
+}
+
+type CommonConfig struct {
+	FileDeltaCheck string `yaml:"file_delta_check,omitempty"`
 }
 
 type StorageConfig struct {
@@ -127,6 +132,12 @@ func (cfg MainConfig) Validate() error {
 		return errors.New("main config must include at least one storage entry")
 	}
 
+	switch strings.ToLower(strings.TrimSpace(cfg.Common.FileDeltaCheck)) {
+	case "", "checksum", "file_size":
+	default:
+		return fmt.Errorf("common.file_delta_check %q unsupported; use checksum or file_size", cfg.Common.FileDeltaCheck)
+	}
+
 	names := map[string]struct{}{}
 	for i := range cfg.Storage {
 		s := cfg.Storage[i]
@@ -159,6 +170,14 @@ func (cfg MainConfig) Validate() error {
 	}
 
 	return nil
+}
+
+func (cfg MainConfig) ResolveFileDeltaCheck() string {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Common.FileDeltaCheck))
+	if mode == "file_size" {
+		return "file_size"
+	}
+	return "checksum"
 }
 
 func (cfg ServiceConfig) Validate() error {

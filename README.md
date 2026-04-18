@@ -37,6 +37,8 @@ storage:
     secret_access_key: your-secret
     use_native_object_versioning: false
     base_path: /backup
+common:
+  file_delta_check: checksum # checksum | file_size
 ```
 
 Service config example:
@@ -65,6 +67,8 @@ service:
 - Sectioned `--help` output for root and subcommands with dynamic available values for `--type`, `--engine`, and `--storage`
 - Short and long flag pairs for backup/restore/list (`-t/-c/-E/-l/-s/-e/-m/-n/-N/-v/-a/-d`)
 - Unified info/debug logging (`--debug`) including external command output and S3 API call summaries
+- Backup delta-check strategies: checksum (default) or file-size (`common.file_delta_check` and backup flags)
+- `backup --force` to always upload a new backup version regardless of delta-check match
 - Built-in module templates embedded from per-service YAML files under `internal/modules/yaml/*.yaml`
 - Colorized command output and solid-border table-formatted backup/service listings
 
@@ -72,6 +76,16 @@ service:
 Backup a service:
 ```bash
 sloth backup app-db
+```
+
+Backup with explicit file-size delta check:
+```bash
+sloth backup app-db --use-file-size-check
+```
+
+Force upload regardless of delta checks:
+```bash
+sloth backup app-db --force
 ```
 
 Create a new local service entry and backup immediately:
@@ -92,6 +106,11 @@ sloth list
 List backups for a service:
 ```bash
 sloth list app-db
+```
+
+List backups with object key column:
+```bash
+sloth list app-db --show-object-key
 ```
 
 Restore stage 1 (retrieve backup):

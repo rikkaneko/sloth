@@ -42,14 +42,18 @@ type fakeStorageProvider struct {
 	listedVersions []storage.ObjectInfo
 	putKey         string
 	putFile        string
+	putCalls       int
 	getKey         string
 	getVersionID   string
 	getDestPath    string
+	getCalls       int
+	getBody        []byte
 }
 
 func (f *fakeStorageProvider) Put(ctx context.Context, key string, localPath string) error {
 	f.putKey = key
 	f.putFile = localPath
+	f.putCalls++
 	return nil
 }
 
@@ -57,7 +61,12 @@ func (f *fakeStorageProvider) Get(ctx context.Context, key string, versionID str
 	f.getKey = key
 	f.getVersionID = versionID
 	f.getDestPath = localPath
-	return os.WriteFile(localPath, []byte("backup-data"), 0o600)
+	f.getCalls++
+	body := f.getBody
+	if len(body) == 0 {
+		body = []byte("backup-data")
+	}
+	return os.WriteFile(localPath, body, 0o600)
 }
 
 func (f *fakeStorageProvider) ListObjects(ctx context.Context, prefix string) ([]storage.ObjectInfo, error) {
@@ -223,5 +232,214 @@ func TestBackupNonNativeUsesIncrementedVersion(t *testing.T) {
 	}
 	if !strings.Contains(string(savedConfig), "last_backup_time") {
 		t.Fatalf("expected last_backup_time to be persisted")
+	}
+}
+
+func TestBackupSkipsUploadWhenChecksumMatches(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	if err := os.MkdirAll(filepath.Join(homeDir, ".config", "sloth"), 0o755); err != nil {
+		t.Fatalf("mkdir home config dir: %v", err)
+	}
+	mainConfig := "storage:\n  - name: default\n    type: s3\n    endpoint: https://example.com\n    region: us-east-1\n    bucket: backups\n    access_key_id: key\n    secret_access_key: secret\n    use_native_object_versioning: false\n    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(homeDir, ".config", "sloth", "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	content := []byte("same-checksum")
+	artifact := filepath.Join(workingDir, "artifact.sql")
+	if err := os.WriteFile(artifact, content, 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{
+				Key:          "backup/app/1/app-mysql-backup.sql",
+				Size:         int64(len(content)),
+				LastModified: time.Date(2026, 4, 17, 11, 0, 0, 0, time.UTC),
+			},
+		},
+		getBody: content,
+	}
+
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.Backup(context.Background(), BackupOptions{
+		ServiceID:     "app",
+		Type:          "mysql",
+		ContainerName: "app-db",
+		Local:         true,
+	})
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	if !outcome.Skipped {
+		t.Fatalf("expected backup to be skipped")
+	}
+	if provider.putCalls != 0 {
+		t.Fatalf("expected no upload call when checksum matches")
+	}
+	if provider.getCalls == 0 {
+		t.Fatalf("expected checksum compare to download latest object")
+	}
+}
+
+func TestBackupSkipsUploadWhenFileSizeCheckEnabled(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	if err := os.MkdirAll(filepath.Join(homeDir, ".config", "sloth"), 0o755); err != nil {
+		t.Fatalf("mkdir home config dir: %v", err)
+	}
+	mainConfig := "storage:\n  - name: default\n    type: s3\n    endpoint: https://example.com\n    region: us-east-1\n    bucket: backups\n    access_key_id: key\n    secret_access_key: secret\n    use_native_object_versioning: false\n    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(homeDir, ".config", "sloth", "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	content := []byte("size-match")
+	artifact := filepath.Join(workingDir, "artifact.sql")
+	if err := os.WriteFile(artifact, content, 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{
+				Key:          "backup/app/1/app-mysql-backup.sql",
+				Size:         int64(len(content)),
+				LastModified: time.Date(2026, 4, 17, 11, 0, 0, 0, time.UTC),
+			},
+		},
+		getBody: []byte("different-content"),
+	}
+
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.Backup(context.Background(), BackupOptions{
+		ServiceID:     "app",
+		Type:          "mysql",
+		ContainerName: "app-db",
+		Local:         true,
+		UseFileSize:   true,
+	})
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	if !outcome.Skipped {
+		t.Fatalf("expected backup to be skipped by file-size check")
+	}
+	if provider.putCalls != 0 {
+		t.Fatalf("expected no upload call for file-size skip")
+	}
+	if provider.getCalls != 0 {
+		t.Fatalf("expected no checksum download when only file-size check is used")
+	}
+}
+
+func TestBackupForceUploadsEvenWhenDeltaMatches(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	if err := os.MkdirAll(filepath.Join(homeDir, ".config", "sloth"), 0o755); err != nil {
+		t.Fatalf("mkdir home config dir: %v", err)
+	}
+	mainConfig := "storage:\n  - name: default\n    type: s3\n    endpoint: https://example.com\n    region: us-east-1\n    bucket: backups\n    access_key_id: key\n    secret_access_key: secret\n    use_native_object_versioning: false\n    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(homeDir, ".config", "sloth", "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	content := []byte("same-checksum")
+	artifact := filepath.Join(workingDir, "artifact.sql")
+	if err := os.WriteFile(artifact, content, 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{
+				Key:          "backup/app/1/app-mysql-backup.sql",
+				Size:         int64(len(content)),
+				LastModified: time.Date(2026, 4, 17, 11, 0, 0, 0, time.UTC),
+			},
+		},
+		getBody: content,
+	}
+
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.Backup(context.Background(), BackupOptions{
+		ServiceID:     "app",
+		Type:          "mysql",
+		ContainerName: "app-db",
+		Local:         true,
+		Force:         true,
+	})
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	if outcome.Skipped {
+		t.Fatalf("expected backup to upload when force is enabled")
+	}
+	if provider.putCalls == 0 {
+		t.Fatalf("expected upload call when force is enabled")
+	}
+	if provider.getCalls != 0 {
+		t.Fatalf("expected force to bypass delta compare download")
 	}
 }

@@ -2,7 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path"
@@ -67,6 +70,9 @@ type BackupOptions struct {
 	ContainerName string
 	Engine        string
 	Local         bool
+	Force         bool
+	UseChecksum   bool
+	UseFileSize   bool
 	Storage       string
 	EnvFile       string
 	ModuleConfig  string
@@ -80,6 +86,7 @@ type BackupOutcome struct {
 	Engine      string
 	ObjectKey   string
 	Version     string
+	Skipped     bool
 }
 
 type ListOutcome struct {
@@ -231,9 +238,16 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 
 	var objectKey string
 	version := "native"
+	latestObject := backupObjectCandidate{}
+	shouldUseChecksum, shouldUseFileSize := resolveFileDeltaChecks(mainConfig, options)
 
 	if storageConfig.UseNativeObjectVersioning {
 		objectKey = path.Join(servicePrefix, backupResult.ArtifactName)
+		versions, err := provider.ListObjectVersions(ctx, objectKey)
+		if err != nil {
+			return BackupOutcome{}, fmt.Errorf("list existing backup object versions: %w", err)
+		}
+		latestObject = selectLatestNativeCandidate(versions, objectKey)
 	} else {
 		existing, err := provider.ListObjects(ctx, servicePrefix+"/")
 		if err != nil {
@@ -241,6 +255,25 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		}
 		version = versioning.NextVersionID(existing, servicePrefix)
 		objectKey = path.Join(servicePrefix, version, backupResult.ArtifactName)
+		latestObject = selectLatestVersionedCandidate(existing, servicePrefix, backupResult.ArtifactName)
+	}
+
+	if !options.Force && latestObject.Exists {
+		upToDate, err := isBackupArtifactUpToDate(ctx, provider, backupResult.LocalPath, fileInfo.Size(), latestObject, shouldUseChecksum, shouldUseFileSize)
+		if err != nil {
+			return BackupOutcome{}, err
+		}
+		if upToDate {
+			ui.Infof("Backup file is already up-to-date. Skipped.")
+			return BackupOutcome{
+				ServiceID:   resolved.Service.Name,
+				StorageName: storageConfigName,
+				Engine:      engine.Name(),
+				ObjectKey:   latestObject.ObjectKey,
+				Version:     latestObject.VersionLabel,
+				Skipped:     true,
+			}, nil
+		}
 	}
 
 	ui.Infof("Uploading backup to %s (Version %s) ...", storageConfigName, version)
@@ -260,6 +293,7 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		Engine:      engine.Name(),
 		ObjectKey:   objectKey,
 		Version:     version,
+		Skipped:     false,
 	}, nil
 }
 
@@ -680,6 +714,147 @@ func humanReadableSize(size int64) string {
 	}
 	value = math.Round(value*10) / 10
 	return fmt.Sprintf("%s %s", strconv.FormatFloat(value, 'f', 1, 64), units[index])
+}
+
+type backupObjectCandidate struct {
+	Exists       bool
+	ObjectKey    string
+	VersionID    string
+	VersionLabel string
+	Size         int64
+	LastModified time.Time
+}
+
+func resolveFileDeltaChecks(mainConfig config.MainConfig, options BackupOptions) (bool, bool) {
+	useChecksum := options.UseChecksum
+	useFileSize := options.UseFileSize
+
+	if !useChecksum && !useFileSize {
+		switch mainConfig.ResolveFileDeltaCheck() {
+		case "file_size":
+			useFileSize = true
+		default:
+			useChecksum = true
+		}
+	}
+
+	return useChecksum, useFileSize
+}
+
+func selectLatestVersionedCandidate(objects []storage.ObjectInfo, servicePrefix string, artifactName string) backupObjectCandidate {
+	bestVersion := -1
+	best := backupObjectCandidate{}
+
+	for _, object := range objects {
+		if !strings.HasSuffix(object.Key, "/"+artifactName) {
+			continue
+		}
+		versionText := versioning.ExtractVersionFromKey(object.Key, servicePrefix)
+		if versionText == "" {
+			continue
+		}
+		versionNumber, err := strconv.Atoi(versionText)
+		if err != nil {
+			continue
+		}
+
+		if versionNumber > bestVersion || (versionNumber == bestVersion && object.LastModified.After(best.LastModified)) {
+			bestVersion = versionNumber
+			best = backupObjectCandidate{
+				Exists:       true,
+				ObjectKey:    object.Key,
+				VersionLabel: versionText,
+				Size:         object.Size,
+				LastModified: object.LastModified,
+			}
+		}
+	}
+
+	return best
+}
+
+func selectLatestNativeCandidate(versions []storage.ObjectInfo, objectKey string) backupObjectCandidate {
+	filtered := make([]storage.ObjectInfo, 0, len(versions))
+	for _, versionObject := range versions {
+		if versionObject.Key == objectKey {
+			filtered = append(filtered, versionObject)
+		}
+	}
+	if len(filtered) == 0 {
+		return backupObjectCandidate{}
+	}
+
+	versioning.SortByLastModifiedDesc(filtered)
+	latest := filtered[0]
+	versionLabel := latest.VersionID
+	if strings.TrimSpace(versionLabel) == "" {
+		versionLabel = "latest"
+	}
+
+	return backupObjectCandidate{
+		Exists:       true,
+		ObjectKey:    latest.Key,
+		VersionID:    latest.VersionID,
+		VersionLabel: versionLabel,
+		Size:         latest.Size,
+		LastModified: latest.LastModified,
+	}
+}
+
+func isBackupArtifactUpToDate(
+	ctx context.Context,
+	provider storage.Provider,
+	localPath string,
+	localSize int64,
+	candidate backupObjectCandidate,
+	useChecksum bool,
+	useFileSize bool,
+) (bool, error) {
+	if useFileSize && localSize == candidate.Size {
+		return true, nil
+	}
+
+	if !useChecksum {
+		return false, nil
+	}
+
+	tempFile, err := os.CreateTemp("", "sloth-delta-remote-*")
+	if err != nil {
+		return false, fmt.Errorf("create temp file for remote delta check: %w", err)
+	}
+	tempPath := tempFile.Name()
+	if err := tempFile.Close(); err != nil {
+		return false, fmt.Errorf("close temp file for remote delta check: %w", err)
+	}
+	defer os.Remove(tempPath)
+
+	if err := provider.Get(ctx, candidate.ObjectKey, candidate.VersionID, tempPath); err != nil {
+		return false, fmt.Errorf("download latest backup object for delta check: %w", err)
+	}
+
+	localChecksum, err := checksumFile(localPath)
+	if err != nil {
+		return false, err
+	}
+	remoteChecksum, err := checksumFile(tempPath)
+	if err != nil {
+		return false, err
+	}
+	return localChecksum == remoteChecksum, nil
+}
+
+func checksumFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open file for checksum: %w", err)
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", fmt.Errorf("calculate file checksum: %w", err)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func artifactExtension(fileName string) string {
