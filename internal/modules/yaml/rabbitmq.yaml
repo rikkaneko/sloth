@@ -2,7 +2,7 @@ artifact_ext: json
 supports_local: true
 backup:
   command:
-    - rabbitmqctl export_definitions "{{target_file}}"
+    - rabbitmqctl export_definitions - --format=json | sed '/"ts":/d' "{{target_file}}"
   target_file: /tmp/sloth-rabbitmq-definitions.json
 restore:
   backup_file:

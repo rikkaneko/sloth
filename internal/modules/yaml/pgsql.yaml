@@ -2,7 +2,7 @@ artifact_ext: sql
 supports_local: true
 backup:
   command:
-    - if [ -n "${POSTGRES_DB}" ]; then PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB}" -h localhost -p "${POSTGRES_PORT:-5432}" > "{{target_file}}"; else PGPASSWORD="${POSTGRES_PASSWORD}" pg_dumpall -U "${POSTGRES_USER:-postgres}" -h localhost -p "${POSTGRES_PORT:-5432}" > "{{target_file}}"; fi
+    - if [ -n "${POSTGRES_DB}" ]; then PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB}" -h localhost -p "${POSTGRES_PORT:-5432}" | sed '/^-- Dumped at/d' > "{{target_file}}"; else PGPASSWORD="${POSTGRES_PASSWORD}" pg_dumpall -U "${POSTGRES_USER:-postgres}" -h localhost -p "${POSTGRES_PORT:-5432}" | sed '/^-- Dumped at/d' > "{{target_file}}"; fi
   target_file: /tmp/sloth-pgsql-backup.sql
 restore:
   backup_file:

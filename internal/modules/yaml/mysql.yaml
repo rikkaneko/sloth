@@ -2,7 +2,7 @@ artifact_ext: sql
 supports_local: true
 backup:
   command:
-    - if [ -n "${MYSQL_DATABASE}" ]; then mysqldump -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD}}" --single-transaction "${MYSQL_DATABASE}" > "{{target_file}}"; else mysqldump -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD}}" --single-transaction --all-databases > "{{target_file}}"; fi
+    - if [ -n "${MYSQL_DATABASE}" ]; then mysqldump --skip-dump-date -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD}}" --single-transaction "${MYSQL_DATABASE}" > "{{target_file}}"; else mysqldump --skip-dump-date -u"${MYSQL_USER:-root}" -p"${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD}}" --single-transaction --all-databases > "{{target_file}}"; fi
   target_file: /tmp/sloth-mysql-backup.sql
 restore:
   backup_file:

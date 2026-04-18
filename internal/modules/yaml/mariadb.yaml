@@ -2,7 +2,7 @@ artifact_ext: sql
 supports_local: true
 backup:
   command:
-    - if [ -n "${MARIADB_DATABASE}" ]; then mariadb-dump -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" --single-transaction "${MARIADB_DATABASE}" > "{{target_file}}"; else mariadb-dump -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" --single-transaction --all-databases > "{{target_file}}"; fi
+    - if [ -n "${MARIADB_DATABASE}" ]; then mariadb-dump --skip-dump-date -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" --single-transaction "${MARIADB_DATABASE}" > "{{target_file}}"; else mariadb-dump --skip-dump-date -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" --single-transaction --all-databases > "{{target_file}}"; fi
   target_file: /tmp/sloth-mariadb-backup.sql
 restore:
   backup_file:
