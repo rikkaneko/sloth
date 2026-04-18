@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 
@@ -15,6 +16,21 @@ type Registry struct{}
 
 func NewRegistry() Registry {
 	return Registry{}
+}
+
+func AvailableServiceTypes() ([]string, error) {
+	builtins, err := builtInDefinitions()
+	if err != nil {
+		return nil, err
+	}
+
+	types := make([]string, 0, len(builtins)+1)
+	for moduleType := range builtins {
+		types = append(types, moduleType)
+	}
+	types = append(types, "volume")
+	sort.Strings(types)
+	return types, nil
 }
 
 func (Registry) Resolve(serviceType string, overridePath string) (Module, error) {

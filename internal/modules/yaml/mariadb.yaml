@@ -2,10 +2,10 @@ artifact_ext: sql
 supports_local: true
 backup:
   command:
-    - if [ -n "${DB_NAME}" ]; then mariadb-dump -u"${DB_USER}" -p"${DB_PASS}" --single-transaction "${DB_NAME}" > "{{target_file}}"; else mariadb-dump -u"${DB_USER}" -p"${DB_PASS}" --single-transaction --all-databases > "{{target_file}}"; fi
+    - if [ -n "${MARIADB_DATABASE}" ]; then mariadb-dump -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" --single-transaction "${MARIADB_DATABASE}" > "{{target_file}}"; else mariadb-dump -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" --single-transaction --all-databases > "{{target_file}}"; fi
   target_file: /tmp/sloth-mariadb-backup.sql
 restore:
   backup_file:
     to_container: /tmp/sloth-mariadb-restore.sql
   command:
-    - mariadb -u"${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" < "{{backup_file}}"
+    - if [ -n "${MARIADB_DATABASE}" ]; then mariadb -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" "${MARIADB_DATABASE}" < "{{backup_file}}"; else mariadb -u"${MARIADB_USER:-root}" -p"${MARIADB_PASSWORD:-${MARIADB_ROOT_PASSWORD}}" < "{{backup_file}}"; fi

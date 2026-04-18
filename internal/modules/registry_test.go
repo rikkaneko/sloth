@@ -3,6 +3,7 @@ package modules
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +54,67 @@ func TestRegistryRejectsUnsupportedType(t *testing.T) {
 	_, err := registry.Resolve("unknown", "")
 	if err == nil {
 		t.Fatalf("expected error for unsupported type")
+	}
+}
+
+func TestAvailableServiceTypesIncludesVolume(t *testing.T) {
+	types, err := AvailableServiceTypes()
+	if err != nil {
+		t.Fatalf("available service types: %v", err)
+	}
+
+	for _, expected := range []string{"directus", "mariadb", "mysql", "pgsql", "rabbitmq", "redis", "volume"} {
+		if !contains(types, expected) {
+			t.Fatalf("expected %q in available service types: %v", expected, types)
+		}
+	}
+}
+
+func TestBuiltInDatabaseModulesUseOfficialImageEnvVars(t *testing.T) {
+	definitions, err := builtInDefinitions()
+	if err != nil {
+		t.Fatalf("load built-in definitions: %v", err)
+	}
+
+	mysqlCommands := strings.Join(append([]string{}, definitions["mysql"].definition.Backup.Command...), "\n") +
+		"\n" + strings.Join(definitions["mysql"].definition.Restore.Command, "\n")
+	assertContainsAll(t, mysqlCommands, []string{"MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD"})
+	assertContainsNone(t, mysqlCommands, []string{"${DB_NAME}", "${DB_USER}", "${DB_PASS}"})
+
+	mariaDBCommands := strings.Join(append([]string{}, definitions["mariadb"].definition.Backup.Command...), "\n") +
+		"\n" + strings.Join(definitions["mariadb"].definition.Restore.Command, "\n")
+	assertContainsAll(t, mariaDBCommands, []string{"MARIADB_DATABASE", "MARIADB_USER", "MARIADB_PASSWORD", "MARIADB_ROOT_PASSWORD"})
+	assertContainsNone(t, mariaDBCommands, []string{"${DB_NAME}", "${DB_USER}", "${DB_PASS}"})
+
+	pgCommands := strings.Join(append([]string{}, definitions["pgsql"].definition.Backup.Command...), "\n") +
+		"\n" + strings.Join(definitions["pgsql"].definition.Restore.Command, "\n")
+	assertContainsAll(t, pgCommands, []string{"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"})
+	assertContainsNone(t, pgCommands, []string{"${DB_NAME}", "${DB_USER}", "${DB_PASS}"})
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func assertContainsAll(t *testing.T, input string, expected []string) {
+	t.Helper()
+	for _, value := range expected {
+		if !strings.Contains(input, value) {
+			t.Fatalf("expected command text to contain %q\n%s", value, input)
+		}
+	}
+}
+
+func assertContainsNone(t *testing.T, input string, forbidden []string) {
+	t.Helper()
+	for _, value := range forbidden {
+		if strings.Contains(input, value) {
+			t.Fatalf("expected command text to not contain %q\n%s", value, input)
+		}
 	}
 }

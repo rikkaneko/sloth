@@ -35,20 +35,42 @@ func (a App) Run(ctx context.Context, args []string) error {
 	a.printBanner()
 
 	if len(args) == 0 {
-		a.printUsage()
+		a.printRootHelp()
 		return nil
+	}
+
+	if isRootHelpArg(args[0]) {
+		a.printRootHelp()
+		return nil
+	}
+
+	if args[0] == "help" {
+		if len(args) == 1 {
+			a.printRootHelp()
+			return nil
+		}
+		return a.printCommandHelp(args[1])
 	}
 
 	switch args[0] {
 	case "backup":
+		if hasHelpFlag(args[1:]) {
+			a.printBackupHelp()
+			return nil
+		}
 		return a.runBackup(ctx, args[1:])
 	case "list":
+		if hasHelpFlag(args[1:]) {
+			a.printListHelp()
+			return nil
+		}
 		return a.runList(ctx, args[1:])
 	case "restore":
+		if hasHelpFlag(args[1:]) {
+			a.printRestoreHelp()
+			return nil
+		}
 		return a.runRestore(ctx, args[1:])
-	case "help", "--help", "-h":
-		a.printUsage()
-		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -205,20 +227,9 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (a App) printUsage() {
-	usage := []string{
-		"Commands:",
-		"  sloth backup <service-id> [--type --container-name --engine --storage --env --module-config]",
-		"  sloth list [<service-id>]",
-		"  sloth restore <service-id> [--version <id|latest>] [--type --container-name --engine --storage --env]",
-		"  sloth restore <service-id> --apply <backup-file> [--type --container-name --engine --storage --env]",
-		"",
-	}
-	fmt.Println(strings.Join(usage, "\n"))
-}
-
 func (a App) printBanner() {
-	fmt.Printf("sloth-cli %s\n\n", a.version)
+	fmt.Println("Copyright (c) rikkaneko <rikkaneko23@gmail.com>")
+	fmt.Printf("Sloth CLI (version %s)\n\n", a.version)
 }
 
 func splitCSV(raw string) []string {

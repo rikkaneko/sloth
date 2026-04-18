@@ -32,5 +32,11 @@ Sloth is a modular Go CLI organized around three runtime contracts:
   For Redis in local mode, restore copies the RDB file to `REDIS_RDB_PATH` (or configured restore path) and requires a service restart.
 
 ## Extensibility
-- Add a new service type by implementing `modules.Module` and registering it in `internal/modules/registry.go`.
+- Prefer YAML-first module additions under `internal/modules/yaml/*.yaml` for command-driven services.
+- Add a new service type by implementing `modules.Module` in Go only when runtime behavior cannot be represented by command templates alone.
+- Override built-in module commands using `module_config` in service config or `--module-config` per command.
 - Add new storage backend by implementing `storage.Provider` and extending `DefaultStorageFactory`.
+
+See also:
+- `docs/service-modules.md`
+- `docs/module-authoring.md`

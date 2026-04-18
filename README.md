@@ -62,6 +62,7 @@ service:
 - Native object versioning mode and sloth-managed incremental versioning mode
 - Engine auto-detection (`podman` then `docker`) by `container_name` when engine is omitted
 - Automatic env loading with `${VAR}` interpolation
+- Sectioned `--help` output for root and subcommands with dynamic available values for `--type`, `--engine`, and `--storage`
 - Built-in module templates embedded from per-service YAML files under `internal/modules/yaml/*.yaml`
 - Colorized command output and table-formatted backup/service listings
 
@@ -100,6 +101,12 @@ For Redis local restore target path override:
 ```bash
 REDIS_RDB_PATH=/var/lib/redis/dump.rdb sloth restore redis-service --engine local --apply ./redis-service-backup-20260417-120000-latest.rdb
 ```
+
+## Documentation
+- Commands and help usage: `docs/commands.md`
+- Service env variables and embedded module commands: `docs/service-modules.md`
+- Module authoring and YAML override guide: `docs/module-authoring.md`
+- Architecture overview: `docs/architecture.md`
 
 ## License
 MIT
