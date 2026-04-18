@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	awss3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"sloth/internal/config"
 	"sloth/internal/storage"
@@ -16,8 +17,13 @@ import (
 )
 
 type Provider struct {
-	client *awss3.Client
-	bucket string
+	client           *awss3.Client
+	headObjectClient headObjectClient
+	bucket           string
+}
+
+type headObjectClient interface {
+	HeadObject(ctx context.Context, params *awss3.HeadObjectInput, optFns ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error)
 }
 
 func NewProvider(cfg config.StorageConfig) (*Provider, error) {
@@ -38,7 +44,11 @@ func NewProvider(cfg config.StorageConfig) (*Provider, error) {
 		options.UsePathStyle = true
 	})
 
-	return &Provider{client: client, bucket: cfg.Bucket}, nil
+	return &Provider{
+		client:           client,
+		headObjectClient: client,
+		bucket:           cfg.Bucket,
+	}, nil
 }
 
 func (p *Provider) Put(ctx context.Context, key string, localPath string) error {
@@ -152,4 +162,28 @@ func (p *Provider) ListObjectVersions(ctx context.Context, prefix string) ([]sto
 	ui.Debugf("s3::ListObjectVersions result {versions:%d}", len(versions))
 
 	return versions, nil
+}
+
+func (p *Provider) HeadObject(ctx context.Context, key string, versionID string) (storage.ObjectMetadata, error) {
+	input := &awss3.HeadObjectInput{
+		Bucket:       aws.String(p.bucket),
+		Key:          aws.String(key),
+		ChecksumMode: awss3types.ChecksumModeEnabled,
+	}
+	if versionID != "" {
+		input.VersionId = aws.String(versionID)
+	}
+
+	ui.Debugf("s3::HeadObject {bucket:%q, key:%q, version_id:%q, checksum_mode:%q}", p.bucket, key, versionID, awss3types.ChecksumModeEnabled)
+	output, err := p.headObjectClient.HeadObject(ctx, input)
+	if err != nil {
+		return storage.ObjectMetadata{}, fmt.Errorf("head object %s: %w", key, err)
+	}
+
+	metadata := storage.ObjectMetadata{
+		Size:           aws.ToInt64(output.ContentLength),
+		ChecksumSHA256: aws.ToString(output.ChecksumSHA256),
+	}
+	ui.Debugf("s3::HeadObject response {content_length:%d, checksum_sha256:%q}", metadata.Size, metadata.ChecksumSHA256)
+	return metadata, nil
 }

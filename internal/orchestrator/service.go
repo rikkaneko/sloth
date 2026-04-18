@@ -3,7 +3,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"math"
@@ -810,40 +810,35 @@ func isBackupArtifactUpToDate(
 	useChecksum bool,
 	useFileSize bool,
 ) (bool, error) {
-	if useFileSize && localSize == candidate.Size {
-		return true, nil
+	metadata, err := provider.HeadObject(ctx, candidate.ObjectKey, candidate.VersionID)
+	if err != nil {
+		return false, fmt.Errorf("read latest backup object metadata for delta check: %w", err)
+	}
+
+	if useChecksum {
+		localChecksum, err := checksumFileSHA256Base64(localPath)
+		if err != nil {
+			return false, err
+		}
+		remoteChecksum := strings.TrimSpace(metadata.ChecksumSHA256)
+		if remoteChecksum != "" {
+			return localChecksum == remoteChecksum, nil
+		}
+		ui.Warnf("Remote checksum is unavailable, fallback to file-size check")
+	}
+
+	if useFileSize {
+		return localSize == metadata.Size, nil
 	}
 
 	if !useChecksum {
 		return false, nil
 	}
 
-	tempFile, err := os.CreateTemp("", "sloth-delta-remote-*")
-	if err != nil {
-		return false, fmt.Errorf("create temp file for remote delta check: %w", err)
-	}
-	tempPath := tempFile.Name()
-	if err := tempFile.Close(); err != nil {
-		return false, fmt.Errorf("close temp file for remote delta check: %w", err)
-	}
-	defer os.Remove(tempPath)
-
-	if err := provider.Get(ctx, candidate.ObjectKey, candidate.VersionID, tempPath); err != nil {
-		return false, fmt.Errorf("download latest backup object for delta check: %w", err)
-	}
-
-	localChecksum, err := checksumFile(localPath)
-	if err != nil {
-		return false, err
-	}
-	remoteChecksum, err := checksumFile(tempPath)
-	if err != nil {
-		return false, err
-	}
-	return localChecksum == remoteChecksum, nil
+	return localSize == metadata.Size, nil
 }
 
-func checksumFile(path string) (string, error) {
+func checksumFileSHA256Base64(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open file for checksum: %w", err)
@@ -854,7 +849,7 @@ func checksumFile(path string) (string, error) {
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", fmt.Errorf("calculate file checksum: %w", err)
 	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
+	return base64.StdEncoding.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func artifactExtension(fileName string) string {

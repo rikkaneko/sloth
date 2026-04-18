@@ -68,6 +68,7 @@ service:
 - Short and long flag pairs for backup/restore/list (`-t/-c/-E/-l/-s/-e/-m/-n/-N/-v/-a/-d`)
 - Unified info/debug logging (`--debug`) including external command output and S3 API call summaries
 - Backup delta-check strategies: checksum (default) or file-size (`common.file_delta_check` and backup flags)
+- Checksum delta-check reads S3 object metadata via `HeadObject` (`ChecksumMode=ENABLED`); if checksum metadata is unavailable, sloth logs a warning and falls back to file-size compare
 - `backup --force` to always upload a new backup version regardless of delta-check match
 - Built-in module templates embedded from per-service YAML files under `internal/modules/yaml/*.yaml`
 - Colorized command output and solid-border table-formatted backup/service listings

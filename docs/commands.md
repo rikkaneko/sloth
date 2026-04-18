@@ -32,6 +32,8 @@ Behavior:
   - Default: checksum.
   - Config override: `common.file_delta_check: checksum|file_size`.
   - Command overrides: `--use-checksum`, `--use-file-size-check`.
+  - Checksum check uses S3 `HeadObject` metadata (`ChecksumMode=ENABLED`) instead of downloading remote object data.
+  - If remote checksum metadata is unavailable, sloth logs `[warn] Remote checksum is unavailable, fallback to file-size check` and compares file size.
   - `--force` bypasses all delta checks and always uploads a new backup version.
   - Upload is skipped when any enabled check matches latest backup (`[info] Backup file is already up-to-date. Skipped.`).
 
