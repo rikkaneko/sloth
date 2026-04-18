@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,20 +43,22 @@ func (f fakeModuleRegistry) Resolve(serviceType string, overridePath string) (mo
 }
 
 type fakeStorageProvider struct {
-	listedObjects  []storage.ObjectInfo
-	listedVersions []storage.ObjectInfo
-	headMetadata   storage.ObjectMetadata
-	headCalls      int
-	headKey        string
-	headVersionID  string
-	putKey         string
-	putFile        string
-	putCalls       int
-	getKey         string
-	getVersionID   string
-	getDestPath    string
-	getCalls       int
-	getBody        []byte
+	listedObjects       []storage.ObjectInfo
+	listedVersions      []storage.ObjectInfo
+	listObjectsPrefixes []string
+	listVersionPrefixes []string
+	headMetadata        storage.ObjectMetadata
+	headCalls           int
+	headKey             string
+	headVersionID       string
+	putKey              string
+	putFile             string
+	putCalls            int
+	getKey              string
+	getVersionID        string
+	getDestPath         string
+	getCalls            int
+	getBody             []byte
 }
 
 func (f *fakeStorageProvider) Put(ctx context.Context, key string, localPath string) error {
@@ -78,10 +81,12 @@ func (f *fakeStorageProvider) Get(ctx context.Context, key string, versionID str
 }
 
 func (f *fakeStorageProvider) ListObjects(ctx context.Context, prefix string) ([]storage.ObjectInfo, error) {
+	f.listObjectsPrefixes = append(f.listObjectsPrefixes, prefix)
 	return f.listedObjects, nil
 }
 
 func (f *fakeStorageProvider) ListObjectVersions(ctx context.Context, prefix string) ([]storage.ObjectInfo, error) {
+	f.listVersionPrefixes = append(f.listVersionPrefixes, prefix)
 	return f.listedVersions, nil
 }
 
@@ -98,6 +103,18 @@ type testStorageFactory struct {
 
 func (t testStorageFactory) Build(storageConfig config.StorageConfig) (storage.Provider, error) {
 	return t.provider, nil
+}
+
+type namedTestStorageFactory struct {
+	providers map[string]storage.Provider
+}
+
+func (t namedTestStorageFactory) Build(storageConfig config.StorageConfig) (storage.Provider, error) {
+	provider, ok := t.providers[storageConfig.Name]
+	if !ok {
+		return nil, fmt.Errorf("provider for storage %q not found", storageConfig.Name)
+	}
+	return provider, nil
 }
 
 type fakeModule struct {
@@ -620,6 +637,236 @@ func TestBackupChecksumMissingFallsBackToFileSizeAndUploadsWhenSizeDiffers(t *te
 	}
 	if !strings.Contains(output, "Remote checksum is unavailable, fallback to file-size check") {
 		t.Fatalf("expected fallback warning in output, got: %s", output)
+	}
+}
+
+func TestListRemoteGroupsServicesByStorage(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mainConfigPath := filepath.Join(homeDir, ".config", "sloth", "main.yaml")
+	if err := os.MkdirAll(filepath.Dir(mainConfigPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: archive\n" +
+		"    type: s3\n" +
+		"    endpoint: https://archive.example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: archive\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://default.example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: default\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n" +
+		"  - name: empty\n" +
+		"    type: s3\n" +
+		"    endpoint: https://empty.example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: empty\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	archiveProvider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{
+				Key:          "backup/svc-b/1/svc-b.sql",
+				LastModified: time.Date(2026, 4, 18, 8, 0, 0, 0, time.UTC),
+			},
+			{
+				Key:          "backup/svc-a/1/svc-a.sql",
+				LastModified: time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC),
+			},
+			{
+				Key:          "backup/svc-a/2/svc-a.sql",
+				LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	defaultProvider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{
+				Key:          "backup/svc-c/1/svc-c.sql",
+				LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	emptyProvider := &fakeStorageProvider{}
+
+	manager := Manager{
+		storageFactory: namedTestStorageFactory{
+			providers: map[string]storage.Provider{
+				"archive": archiveProvider,
+				"default": defaultProvider,
+				"empty":   emptyProvider,
+			},
+		},
+	}
+
+	outcome, err := manager.List(context.Background(), ListOptions{Remote: true})
+	if err != nil {
+		t.Fatalf("list remote: %v", err)
+	}
+
+	if len(outcome.RemoteServiceGroups) != 2 {
+		t.Fatalf("expected 2 non-empty storage groups, got %d", len(outcome.RemoteServiceGroups))
+	}
+	if outcome.RemoteServiceGroups[0].Storage != "archive" || outcome.RemoteServiceGroups[1].Storage != "default" {
+		t.Fatalf("unexpected group order: %+v", outcome.RemoteServiceGroups)
+	}
+
+	archiveRows := outcome.RemoteServiceGroups[0].Rows
+	if len(archiveRows) != 2 {
+		t.Fatalf("expected 2 archive rows, got %d", len(archiveRows))
+	}
+	if archiveRows[0].Service != "svc-a" || archiveRows[1].Service != "svc-b" {
+		t.Fatalf("expected service rows sorted by name, got %+v", archiveRows)
+	}
+	if archiveRows[0].ObjectKey != "backup/svc-a/2/svc-a.sql" {
+		t.Fatalf("expected latest object key for svc-a, got %q", archiveRows[0].ObjectKey)
+	}
+
+	if len(archiveProvider.listObjectsPrefixes) != 1 || archiveProvider.listObjectsPrefixes[0] != "backup/" {
+		t.Fatalf("expected archive list prefix backup/, got %+v", archiveProvider.listObjectsPrefixes)
+	}
+	if len(defaultProvider.listObjectsPrefixes) != 1 || defaultProvider.listObjectsPrefixes[0] != "backup/" {
+		t.Fatalf("expected default list prefix backup/, got %+v", defaultProvider.listObjectsPrefixes)
+	}
+	if len(emptyProvider.listObjectsPrefixes) != 1 || emptyProvider.listObjectsPrefixes[0] != "backup/" {
+		t.Fatalf("expected empty list prefix backup/, got %+v", emptyProvider.listObjectsPrefixes)
+	}
+}
+
+func TestListRemoteServiceIDGroupsBackupsByStorage(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mainConfigPath := filepath.Join(homeDir, ".config", "sloth", "main.yaml")
+	if err := os.MkdirAll(filepath.Dir(mainConfigPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: archive\n" +
+		"    type: s3\n" +
+		"    endpoint: https://archive.example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: archive\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n" +
+		"  - name: versioned\n" +
+		"    type: s3\n" +
+		"    endpoint: https://versioned.example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: versioned\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: true\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	archiveProvider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{
+				Key:          "backup/svc/1/svc.sql",
+				LastModified: time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC),
+			},
+			{
+				Key:          "backup/svc/2/svc.sql",
+				LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	versionedProvider := &fakeStorageProvider{
+		listedVersions: []storage.ObjectInfo{
+			{
+				Key:          "backup/svc/svc.sql",
+				VersionID:    "v1",
+				LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC),
+			},
+			{
+				Key:          "backup/svc/svc.sql",
+				VersionID:    "v2",
+				LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	manager := Manager{
+		storageFactory: namedTestStorageFactory{
+			providers: map[string]storage.Provider{
+				"archive":   archiveProvider,
+				"versioned": versionedProvider,
+			},
+		},
+	}
+
+	outcome, err := manager.List(context.Background(), ListOptions{
+		ServiceID: "svc",
+		Remote:    true,
+	})
+	if err != nil {
+		t.Fatalf("list remote service: %v", err)
+	}
+
+	if len(outcome.RemoteBackupGroups) != 2 {
+		t.Fatalf("expected 2 backup groups, got %d", len(outcome.RemoteBackupGroups))
+	}
+	if outcome.RemoteBackupGroups[0].Storage != "archive" || outcome.RemoteBackupGroups[1].Storage != "versioned" {
+		t.Fatalf("unexpected storage order: %+v", outcome.RemoteBackupGroups)
+	}
+
+	archiveBackups := outcome.RemoteBackupGroups[0].Backups
+	if len(archiveBackups) != 2 {
+		t.Fatalf("expected archive backups, got %d", len(archiveBackups))
+	}
+	if archiveBackups[0].Version != "2" || archiveBackups[1].Version != "1" {
+		t.Fatalf("expected archive backups sorted by latest, got %+v", archiveBackups)
+	}
+	if archiveBackups[0].Storage != "archive" {
+		t.Fatalf("expected archive backup storage metadata, got %+v", archiveBackups[0])
+	}
+
+	versionedBackups := outcome.RemoteBackupGroups[1].Backups
+	if len(versionedBackups) != 2 {
+		t.Fatalf("expected versioned backups, got %d", len(versionedBackups))
+	}
+	if versionedBackups[0].Version != "v2" || versionedBackups[1].Version != "v1" {
+		t.Fatalf("expected native versions sorted by latest, got %+v", versionedBackups)
+	}
+	if versionedBackups[0].Storage != "versioned" {
+		t.Fatalf("expected versioned backup storage metadata, got %+v", versionedBackups[0])
+	}
+
+	if len(archiveProvider.listObjectsPrefixes) != 1 || archiveProvider.listObjectsPrefixes[0] != "backup/svc/" {
+		t.Fatalf("expected archive service prefix backup/svc/, got %+v", archiveProvider.listObjectsPrefixes)
+	}
+	if len(archiveProvider.listVersionPrefixes) != 0 {
+		t.Fatalf("expected no archive version listing, got %+v", archiveProvider.listVersionPrefixes)
+	}
+	if len(versionedProvider.listVersionPrefixes) != 1 || versionedProvider.listVersionPrefixes[0] != "backup/svc/" {
+		t.Fatalf("expected versioned service prefix backup/svc/, got %+v", versionedProvider.listVersionPrefixes)
+	}
+	if len(versionedProvider.listObjectsPrefixes) != 0 {
+		t.Fatalf("expected no versioned object listing, got %+v", versionedProvider.listObjectsPrefixes)
 	}
 }
 

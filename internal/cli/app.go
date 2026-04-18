@@ -24,7 +24,7 @@ type App struct {
 
 type manager interface {
 	Backup(ctx context.Context, options orchestrator.BackupOptions) (orchestrator.BackupOutcome, error)
-	List(ctx context.Context, serviceID string) (orchestrator.ListOutcome, error)
+	List(ctx context.Context, options orchestrator.ListOptions) (orchestrator.ListOutcome, error)
 	RestoreRetrieve(ctx context.Context, options orchestrator.RestoreRetrieveOptions) (orchestrator.RestoreRetrieveOutcome, error)
 	RestoreApply(ctx context.Context, options orchestrator.RestoreApplyOptions) (orchestrator.RestoreApplyOutcome, error)
 }
@@ -164,7 +164,7 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 		return err
 	}
 
-	listOutcome, err := a.manager.List(ctx, outcome.ServiceID)
+	listOutcome, err := a.manager.List(ctx, orchestrator.ListOptions{ServiceID: outcome.ServiceID})
 	if err != nil {
 		return err
 	}
@@ -174,26 +174,60 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 
 func (a App) runList(ctx context.Context, args []string) error {
 	serviceID := ""
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		serviceID = args[0]
-		args = args[1:]
+	flagArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			continue
+		}
+		if serviceID != "" {
+			return fmt.Errorf("list accepts at most one <service-id>")
+		}
+		serviceID = strings.TrimSpace(arg)
 	}
 
 	flagSet := flag.NewFlagSet("list", flag.ContinueOnError)
 	flagSet.SetOutput(os.Stdout)
 	var debugMode bool
 	var showObjectKey bool
+	var remote bool
 	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
 	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
 	flagSet.BoolVar(&showObjectKey, "show-object-key", false, "show object_key column")
-	if err := flagSet.Parse(args); err != nil {
+	flagSet.BoolVar(&remote, "remote", false, "list services/backups from remote storage")
+	if err := flagSet.Parse(flagArgs); err != nil {
 		return err
 	}
 	ui.SetDebug(debugMode)
 
-	outcome, err := a.manager.List(ctx, serviceID)
+	if len(flagSet.Args()) > 0 {
+		return fmt.Errorf("list accepts at most one <service-id>")
+	}
+
+	outcome, err := a.manager.List(ctx, orchestrator.ListOptions{
+		ServiceID: serviceID,
+		Remote:    remote,
+	})
 	if err != nil {
 		return err
+	}
+
+	if remote {
+		if serviceID == "" {
+			if len(outcome.RemoteServiceGroups) == 0 {
+				a.logger.Warnf("No remote services found")
+				return nil
+			}
+			printRemoteServiceGroups(outcome.RemoteServiceGroups, showObjectKey)
+			return nil
+		}
+
+		if len(outcome.RemoteBackupGroups) == 0 {
+			a.logger.Warnf("No backups found for service %s", serviceID)
+			return nil
+		}
+		printRemoteBackupGroups(outcome.RemoteBackupGroups, showObjectKey)
+		return nil
 	}
 
 	if serviceID == "" {
@@ -294,7 +328,7 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	a.logger.Infof("Retrieving backup for service %s ...", serviceID)
+	a.logger.Infof("Retrieving backup for service %s (Version %s) ...", serviceID, versionValue)
 	outcome, err := a.manager.RestoreRetrieve(ctx, orchestrator.RestoreRetrieveOptions{
 		ServiceID:     serviceID,
 		Version:       versionValue,
@@ -310,9 +344,7 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 		return err
 	}
 
-	a.logger.Successf("Backup retrieved")
-	fmt.Printf("file=%s\n", outcome.DownloadedPath)
-	fmt.Printf("object=%s version=%s\n", outcome.ObjectKey, outcome.Version)
+	a.logger.Infof("Downloaded backup file to %q", outcome.DownloadedPath)
 	a.logger.Warnf(outcome.Guidance)
 	return nil
 }
@@ -365,6 +397,35 @@ func printBackupObjectsTable(backups []orchestrator.BackupObject, showObjectKey 
 		headers = append(headers, "object_key")
 	}
 	ui.PrintSolidTable(headers, rows)
+}
+
+func printRemoteServiceGroups(groups []orchestrator.RemoteServiceGroup, showObjectKey bool) {
+	for _, group := range groups {
+		fmt.Printf("Storage: %s\n", group.Storage)
+
+		headers := []string{"service", "last_backup"}
+		rows := make([][]string, 0, len(group.Rows))
+		for _, row := range group.Rows {
+			record := []string{row.Service, row.LastBackup.Format(time.RFC3339)}
+			if showObjectKey {
+				record = append(record, row.ObjectKey)
+			}
+			rows = append(rows, record)
+		}
+
+		if showObjectKey {
+			headers = append(headers, "object_key")
+		}
+
+		ui.PrintSolidTable(headers, rows)
+	}
+}
+
+func printRemoteBackupGroups(groups []orchestrator.RemoteBackupGroup, showObjectKey bool) {
+	for _, group := range groups {
+		fmt.Printf("Storage: %s\n", group.Storage)
+		printBackupObjectsTable(group.Backups, showObjectKey)
+	}
 }
 
 func humanReadableBytes(size int64) string {

@@ -89,16 +89,40 @@ type BackupOutcome struct {
 	Skipped     bool
 }
 
+type ListOptions struct {
+	ServiceID string
+	Remote    bool
+}
+
 type ListOutcome struct {
-	Services []config.ServiceEntry
-	Backups  []BackupObject
+	Services            []config.ServiceEntry
+	Backups             []BackupObject
+	RemoteServiceGroups []RemoteServiceGroup
+	RemoteBackupGroups  []RemoteBackupGroup
 }
 
 type BackupObject struct {
 	Key          string
+	Storage      string
 	Version      string
 	LastModified time.Time
 	Size         int64
+}
+
+type RemoteServiceGroup struct {
+	Storage string
+	Rows    []RemoteServiceRow
+}
+
+type RemoteServiceRow struct {
+	Service    string
+	LastBackup time.Time
+	ObjectKey  string
+}
+
+type RemoteBackupGroup struct {
+	Storage string
+	Backups []BackupObject
 }
 
 type RestoreRetrieveOptions struct {
@@ -297,13 +321,18 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 	}, nil
 }
 
-func (m Manager) List(ctx context.Context, serviceID string) (ListOutcome, error) {
+func (m Manager) List(ctx context.Context, options ListOptions) (ListOutcome, error) {
+	serviceID := strings.TrimSpace(options.ServiceID)
+	if options.Remote {
+		return m.listRemote(ctx, serviceID)
+	}
+
 	serviceResult, err := config.LoadServiceConfig()
 	if err != nil {
 		return ListOutcome{}, err
 	}
 
-	if strings.TrimSpace(serviceID) == "" {
+	if serviceID == "" {
 		services := append([]config.ServiceEntry{}, serviceResult.Config.Service...)
 		sort.Slice(services, func(i int, j int) bool {
 			return services[i].Name < services[j].Name
@@ -349,28 +378,93 @@ func (m Manager) List(ctx context.Context, serviceID string) (ListOutcome, error
 		return ListOutcome{}, err
 	}
 
-	backups := make([]BackupObject, 0, len(objects))
-	for _, obj := range objects {
-		versionValue := obj.VersionID
-		if versionValue == "" {
-			versionValue = versioning.ExtractVersionFromKey(obj.Key, servicePrefix)
-			if versionValue == "" && storageConfig.UseNativeObjectVersioning {
-				versionValue = "latest"
+	backups := buildBackupObjects(objects, servicePrefix, storageConfig.UseNativeObjectVersioning, "")
+	return ListOutcome{Backups: backups}, nil
+}
+
+func (m Manager) listRemote(ctx context.Context, serviceID string) (ListOutcome, error) {
+	mainConfig, _, err := config.LoadMainConfig()
+	if err != nil {
+		return ListOutcome{}, err
+	}
+
+	if serviceID == "" {
+		groups := make([]RemoteServiceGroup, 0, len(mainConfig.Storage))
+
+		for _, storageConfig := range mainConfig.Storage {
+			storageName := strings.TrimSpace(storageConfig.Name)
+			if storageName == "" {
+				continue
 			}
+
+			provider, err := m.storageFactory.Build(storageConfig)
+			if err != nil {
+				return ListOutcome{}, err
+			}
+
+			basePath := config.NormalizeBasePath(storageConfig.BasePath)
+			objects, err := provider.ListObjects(ctx, basePath+"/")
+			if err != nil {
+				return ListOutcome{}, err
+			}
+
+			rows := buildRemoteServiceRows(objects, basePath)
+			if len(rows) == 0 {
+				continue
+			}
+
+			groups = append(groups, RemoteServiceGroup{
+				Storage: storageName,
+				Rows:    rows,
+			})
 		}
-		backups = append(backups, BackupObject{
-			Key:          obj.Key,
-			Version:      versionValue,
-			LastModified: obj.LastModified,
-			Size:         obj.Size,
+
+		sort.Slice(groups, func(i int, j int) bool {
+			return groups[i].Storage < groups[j].Storage
+		})
+		return ListOutcome{RemoteServiceGroups: groups}, nil
+	}
+
+	backupGroups := make([]RemoteBackupGroup, 0, len(mainConfig.Storage))
+	for _, storageConfig := range mainConfig.Storage {
+		storageName := strings.TrimSpace(storageConfig.Name)
+		if storageName == "" {
+			continue
+		}
+
+		provider, err := m.storageFactory.Build(storageConfig)
+		if err != nil {
+			return ListOutcome{}, err
+		}
+
+		basePath := config.NormalizeBasePath(storageConfig.BasePath)
+		servicePrefix := versioning.BuildVersionedPrefix(basePath, serviceID)
+
+		objects := []storage.ObjectInfo{}
+		if storageConfig.UseNativeObjectVersioning {
+			objects, err = provider.ListObjectVersions(ctx, servicePrefix+"/")
+		} else {
+			objects, err = provider.ListObjects(ctx, servicePrefix+"/")
+		}
+		if err != nil {
+			return ListOutcome{}, err
+		}
+
+		backups := buildBackupObjects(objects, servicePrefix, storageConfig.UseNativeObjectVersioning, storageName)
+		if len(backups) == 0 {
+			continue
+		}
+
+		backupGroups = append(backupGroups, RemoteBackupGroup{
+			Storage: storageName,
+			Backups: backups,
 		})
 	}
 
-	sort.Slice(backups, func(i int, j int) bool {
-		return backups[i].LastModified.After(backups[j].LastModified)
+	sort.Slice(backupGroups, func(i int, j int) bool {
+		return backupGroups[i].Storage < backupGroups[j].Storage
 	})
-
-	return ListOutcome{Backups: backups}, nil
+	return ListOutcome{RemoteBackupGroups: backupGroups}, nil
 }
 
 func (m Manager) RestoreRetrieve(ctx context.Context, options RestoreRetrieveOptions) (RestoreRetrieveOutcome, error) {
@@ -858,4 +952,99 @@ func artifactExtension(fileName string) string {
 		return "bin"
 	}
 	return fileName[idx+1:]
+}
+
+func buildBackupObjects(objects []storage.ObjectInfo, servicePrefix string, useNativeObjectVersioning bool, storageName string) []BackupObject {
+	backups := make([]BackupObject, 0, len(objects))
+	for _, object := range objects {
+		versionValue := object.VersionID
+		if versionValue == "" {
+			versionValue = versioning.ExtractVersionFromKey(object.Key, servicePrefix)
+			if versionValue == "" && useNativeObjectVersioning {
+				versionValue = "latest"
+			}
+		}
+
+		backups = append(backups, BackupObject{
+			Key:          object.Key,
+			Storage:      storageName,
+			Version:      versionValue,
+			LastModified: object.LastModified,
+			Size:         object.Size,
+		})
+	}
+
+	sort.Slice(backups, func(i int, j int) bool {
+		if backups[i].LastModified.Equal(backups[j].LastModified) {
+			if backups[i].Version == backups[j].Version {
+				return backups[i].Key < backups[j].Key
+			}
+			return backups[i].Version < backups[j].Version
+		}
+		return backups[i].LastModified.After(backups[j].LastModified)
+	})
+
+	return backups
+}
+
+func buildRemoteServiceRows(objects []storage.ObjectInfo, basePath string) []RemoteServiceRow {
+	latestByService := map[string]RemoteServiceRow{}
+
+	for _, object := range objects {
+		serviceID, ok := extractServiceIDFromObjectKey(object.Key, basePath)
+		if !ok {
+			continue
+		}
+
+		current, exists := latestByService[serviceID]
+		if !exists || object.LastModified.After(current.LastBackup) || (object.LastModified.Equal(current.LastBackup) && object.Key < current.ObjectKey) {
+			latestByService[serviceID] = RemoteServiceRow{
+				Service:    serviceID,
+				LastBackup: object.LastModified,
+				ObjectKey:  object.Key,
+			}
+		}
+	}
+
+	rows := make([]RemoteServiceRow, 0, len(latestByService))
+	for _, row := range latestByService {
+		rows = append(rows, row)
+	}
+
+	sort.Slice(rows, func(i int, j int) bool {
+		if rows[i].Service == rows[j].Service {
+			return rows[i].ObjectKey < rows[j].ObjectKey
+		}
+		return rows[i].Service < rows[j].Service
+	})
+
+	return rows
+}
+
+func extractServiceIDFromObjectKey(key string, basePath string) (string, bool) {
+	normalizedKey := strings.Trim(strings.TrimSpace(key), "/")
+	if normalizedKey == "" {
+		return "", false
+	}
+
+	normalizedBasePath := strings.Trim(strings.TrimSpace(basePath), "/")
+	if normalizedBasePath != "" {
+		prefix := normalizedBasePath + "/"
+		if !strings.HasPrefix(normalizedKey, prefix) {
+			return "", false
+		}
+		normalizedKey = strings.TrimPrefix(normalizedKey, prefix)
+	}
+
+	if normalizedKey == "" {
+		return "", false
+	}
+
+	segments := strings.SplitN(normalizedKey, "/", 2)
+	serviceID := strings.TrimSpace(segments[0])
+	if serviceID == "" {
+		return "", false
+	}
+
+	return serviceID, true
 }

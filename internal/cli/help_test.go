@@ -112,6 +112,8 @@ func TestRunListHelpIncludesShowObjectKey(t *testing.T) {
 	}
 
 	assertContains(t, output, "--show-object-key")
+	assertContains(t, output, "--remote")
+	assertContains(t, output, "sloth list [--remote] [<service-id>]")
 }
 
 func TestRunHelpUnknownTopic(t *testing.T) {

@@ -39,7 +39,7 @@ Behavior:
 
 ## list
 ```bash
-sloth list [<service-id>] [--show-object-key] [-d|--debug]
+sloth list [--remote] [<service-id>] [--show-object-key] [-d|--debug]
 ```
 
 Behavior:
@@ -48,6 +48,11 @@ Behavior:
 - With `<service-id>`: lists backup objects/versions for that service using the same solid-border table style.
 - Backup object `size` is rendered in human-readable format.
 - `object_key` is hidden by default; include `--show-object-key` to show it.
+- With `--remote`: query all configured storages from `~/.config/sloth/main.yaml`.
+  Output is grouped by storage section as `Storage: <storage-name>`, one table per storage.
+  - `sloth list --remote`: columns `service`, `last_backup` (plus `object_key` when `--show-object-key`).
+  - `sloth list --remote <service-id>`: columns `version`, `last_modified`, `size` (plus `object_key` when `--show-object-key`).
+  - Storages with no matching rows are omitted.
 - `--debug` shows storage API call details.
 
 ## restore stage 1 (retrieve)
@@ -57,6 +62,9 @@ sloth restore <service-id> [-v|--version <version-id|latest>] [-t|--type <type>]
 
 Behavior:
 - Downloads backup artifact to current directory.
+- Logs retrieve progress with:
+  - `[info] Retrieving backup for service <service-id> (Version <version>) ...`
+  - `[info] Downloaded backup file to "<file-path>"`
 - File naming format: `<service-id>-backup-<backup-time>-<version>.<suffix>`.
 - Prints operator guidance for container and volume cleanup before apply.
 - Local mode is explicit via `--local`.

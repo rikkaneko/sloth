@@ -14,7 +14,7 @@ type fakeManager struct {
 	backupOptions   orchestrator.BackupOptions
 	restoreOptions  orchestrator.RestoreApplyOptions
 	retrieveOptions orchestrator.RestoreRetrieveOptions
-	listServiceID   string
+	listOptions     orchestrator.ListOptions
 
 	backupOutcome  orchestrator.BackupOutcome
 	listOutcome    orchestrator.ListOutcome
@@ -27,8 +27,8 @@ func (f *fakeManager) Backup(ctx context.Context, options orchestrator.BackupOpt
 	return f.backupOutcome, nil
 }
 
-func (f *fakeManager) List(ctx context.Context, serviceID string) (orchestrator.ListOutcome, error) {
-	f.listServiceID = serviceID
+func (f *fakeManager) List(ctx context.Context, options orchestrator.ListOptions) (orchestrator.ListOutcome, error) {
+	f.listOptions = options
 	return f.listOutcome, nil
 }
 
@@ -60,6 +60,35 @@ func TestRunRestoreRejectsEngineLocalFlag(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "use --local") {
 		t.Fatalf("expected local engine rejection, got %v", err)
 	}
+}
+
+func TestRunRestoreRetrieveUsesRefinedLogs(t *testing.T) {
+	manager := &fakeManager{
+		retrieveResult: orchestrator.RestoreRetrieveOutcome{
+			DownloadedPath: "./svc-backup.sql",
+			ObjectKey:      "backup/svc/3/svc.sql",
+			Version:        "3",
+			Guidance:       "cleanup old data before apply",
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"restore", "svc", "--version", "3"})
+	})
+	if err != nil {
+		t.Fatalf("run restore retrieve: %v", err)
+	}
+
+	if manager.retrieveOptions.Version != "3" {
+		t.Fatalf("expected version 3 to be forwarded, got %+v", manager.retrieveOptions)
+	}
+	assertContains(t, output, "Retrieving backup for service svc (Version 3) ...")
+	assertContains(t, output, "Downloaded backup file to \"./svc-backup.sql\"")
+	assertNotContains(t, output, "file=./svc-backup.sql")
+	assertNotContains(t, output, "object=backup/svc/3/svc.sql")
 }
 
 func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
@@ -189,6 +218,137 @@ func TestRunListWithServiceIDShowObjectKey(t *testing.T) {
 	assertContains(t, output, "object_key")
 	assertContains(t, output, "backup/svc/1/svc.sql")
 	assertContains(t, output, "2.0 KB")
+}
+
+func TestRunListRemoteGroupedByStorage(t *testing.T) {
+	manager := &fakeManager{
+		listOutcome: orchestrator.ListOutcome{
+			RemoteServiceGroups: []orchestrator.RemoteServiceGroup{
+				{
+					Storage: "archive",
+					Rows: []orchestrator.RemoteServiceRow{
+						{
+							Service:    "svc-a",
+							LastBackup: time.Date(2026, 4, 18, 8, 0, 0, 0, time.UTC),
+							ObjectKey:  "backup/svc-a/1/svc-a.sql",
+						},
+					},
+				},
+				{
+					Storage: "default",
+					Rows: []orchestrator.RemoteServiceRow{
+						{
+							Service:    "svc-b",
+							LastBackup: time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC),
+							ObjectKey:  "backup/svc-b/1/svc-b.sql",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list", "--remote"})
+	})
+	if err != nil {
+		t.Fatalf("run list remote: %v", err)
+	}
+
+	if !manager.listOptions.Remote || manager.listOptions.ServiceID != "" {
+		t.Fatalf("unexpected list options: %+v", manager.listOptions)
+	}
+
+	assertContains(t, output, "Storage: archive")
+	assertContains(t, output, "Storage: default")
+	assertContains(t, output, "| service ")
+	assertContains(t, output, "| last_backup ")
+	assertNotContains(t, output, "object_key")
+}
+
+func TestRunListRemoteShowObjectKey(t *testing.T) {
+	manager := &fakeManager{
+		listOutcome: orchestrator.ListOutcome{
+			RemoteServiceGroups: []orchestrator.RemoteServiceGroup{
+				{
+					Storage: "default",
+					Rows: []orchestrator.RemoteServiceRow{
+						{
+							Service:    "svc",
+							LastBackup: time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC),
+							ObjectKey:  "backup/svc/3/svc.sql",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list", "--remote", "--show-object-key"})
+	})
+	if err != nil {
+		t.Fatalf("run list remote show object key: %v", err)
+	}
+
+	assertContains(t, output, "object_key")
+	assertContains(t, output, "backup/svc/3/svc.sql")
+}
+
+func TestRunListRemoteServiceIDGroupedByStorage(t *testing.T) {
+	manager := &fakeManager{
+		listOutcome: orchestrator.ListOutcome{
+			RemoteBackupGroups: []orchestrator.RemoteBackupGroup{
+				{
+					Storage: "archive",
+					Backups: []orchestrator.BackupObject{
+						{
+							Key:          "backup/svc/2/svc.sql",
+							Version:      "2",
+							Size:         4096,
+							LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC),
+						},
+					},
+				},
+				{
+					Storage: "default",
+					Backups: []orchestrator.BackupObject{
+						{
+							Key:          "backup/svc/1/svc.sql",
+							Version:      "1",
+							Size:         1024,
+							LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list", "svc", "--remote"})
+	})
+	if err != nil {
+		t.Fatalf("run list remote service id: %v", err)
+	}
+
+	if !manager.listOptions.Remote || manager.listOptions.ServiceID != "svc" {
+		t.Fatalf("unexpected list options: %+v", manager.listOptions)
+	}
+	assertContains(t, output, "Storage: archive")
+	assertContains(t, output, "Storage: default")
+	assertContains(t, output, "| version ")
+	assertContains(t, output, "4.0 KB")
+	assertContains(t, output, "1.0 KB")
 }
 
 func assertNotContains(t *testing.T, output string, unexpected string) {

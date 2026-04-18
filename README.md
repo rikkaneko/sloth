@@ -67,6 +67,7 @@ service:
 - Sectioned `--help` output for root and subcommands with dynamic available values for `--type`, `--engine`, and `--storage`
 - Short and long flag pairs for backup/restore/list (`-t/-c/-E/-l/-s/-e/-m/-n/-N/-v/-a/-d`)
 - Unified info/debug logging (`--debug`) including external command output and S3 API call summaries
+- Remote list mode with grouped per-storage tables (`sloth list --remote`)
 - Backup delta-check strategies: checksum (default) or file-size (`common.file_delta_check` and backup flags)
 - Checksum delta-check reads S3 object metadata via `HeadObject` (`ChecksumMode=ENABLED`); if checksum metadata is unavailable, sloth logs a warning and falls back to file-size compare
 - `backup --force` to always upload a new backup version regardless of delta-check match
@@ -107,6 +108,16 @@ sloth list
 List backups for a service:
 ```bash
 sloth list app-db
+```
+
+List remote services grouped by storage:
+```bash
+sloth list --remote
+```
+
+List remote backups for a service grouped by storage:
+```bash
+sloth list --remote app-db
 ```
 
 List backups with object key column:
