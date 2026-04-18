@@ -129,6 +129,7 @@ Restore stage 1 (retrieve backup):
 ```bash
 sloth restore app-db --version latest
 ```
+`restore` retrieve stage does not require a service config entry; it can resolve storage via `--storage` or fallback to `default`.
 
 Restore stage 2 (apply local backup file):
 ```bash

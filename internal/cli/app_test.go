@@ -91,6 +91,33 @@ func TestRunRestoreRetrieveUsesRefinedLogs(t *testing.T) {
 	assertNotContains(t, output, "object=backup/svc/3/svc.sql")
 }
 
+func TestRunRestoreRetrieveLogsResolvedVersionInsteadOfLatest(t *testing.T) {
+	manager := &fakeManager{
+		retrieveResult: orchestrator.RestoreRetrieveOutcome{
+			DownloadedPath: "./svc-backup.sql",
+			ObjectKey:      "backup/svc/5/svc.sql",
+			Version:        "5",
+			Guidance:       "cleanup old data before apply",
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"restore", "svc"})
+	})
+	if err != nil {
+		t.Fatalf("run restore retrieve latest: %v", err)
+	}
+
+	if manager.retrieveOptions.Version != "latest" {
+		t.Fatalf("expected latest request to be forwarded, got %+v", manager.retrieveOptions)
+	}
+	assertContains(t, output, "Retrieving backup for service svc (Version 5) ...")
+	assertNotContains(t, output, "Retrieving backup for service svc (Version latest) ...")
+}
+
 func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	manager := &fakeManager{
 		backupOutcome: orchestrator.BackupOutcome{ServiceID: "svc"},

@@ -468,27 +468,9 @@ func (m Manager) listRemote(ctx context.Context, serviceID string) (ListOutcome,
 }
 
 func (m Manager) RestoreRetrieve(ctx context.Context, options RestoreRetrieveOptions) (RestoreRetrieveOutcome, error) {
-	if strings.TrimSpace(options.ServiceID) == "" {
+	serviceID := strings.TrimSpace(options.ServiceID)
+	if serviceID == "" {
 		return RestoreRetrieveOutcome{}, fmt.Errorf("service id is required")
-	}
-
-	resolved, err := resolveServiceForOperation(options.ServiceID, serviceResolutionOptions{
-		Type:          options.Type,
-		ContainerName: options.ContainerName,
-		Engine:        options.Engine,
-		Local:         options.Local,
-		Storage:       options.Storage,
-		EnvFile:       options.EnvFile,
-		ModuleConfig:  options.ModuleConfig,
-		AllowCreate:   false,
-	})
-	if err != nil {
-		return RestoreRetrieveOutcome{}, err
-	}
-
-	module, err := m.moduleRegistry.Resolve(resolved.Service.Type, resolved.Service.ModuleConfig)
-	if err != nil {
-		return RestoreRetrieveOutcome{}, err
 	}
 
 	mainConfig, _, err := config.LoadMainConfig()
@@ -496,12 +478,18 @@ func (m Manager) RestoreRetrieve(ctx context.Context, options RestoreRetrieveOpt
 		return RestoreRetrieveOutcome{}, err
 	}
 
-	storageConfigName := resolved.Service.Storage
-	if options.Storage != "" {
-		storageConfigName = options.Storage
+	serviceResult, err := config.LoadServiceConfig()
+	if err != nil {
+		return RestoreRetrieveOutcome{}, err
 	}
-	if storageConfigName == "" {
-		storageConfigName = "default"
+	service, _, found := serviceResult.Config.Find(serviceID)
+
+	storageConfigName := "default"
+	if found && strings.TrimSpace(service.Storage) != "" {
+		storageConfigName = service.Storage
+	}
+	if strings.TrimSpace(options.Storage) != "" {
+		storageConfigName = options.Storage
 	}
 
 	storageConfig, ok := mainConfig.FindStorage(storageConfigName)
@@ -515,72 +503,72 @@ func (m Manager) RestoreRetrieve(ctx context.Context, options RestoreRetrieveOpt
 	}
 
 	basePath := config.NormalizeBasePath(storageConfig.BasePath)
-	servicePrefix := versioning.BuildVersionedPrefix(basePath, resolved.Service.Name)
-	artifactName := module.ArtifactFileName(resolved.Service)
+	servicePrefix := versioning.BuildVersionedPrefix(basePath, serviceID)
+
+	selectedVersion := strings.TrimSpace(options.Version)
+	if selectedVersion == "" {
+		selectedVersion = "latest"
+	}
 
 	objectKey := ""
-	selectedVersion := options.Version
 	objectTime := m.now()
 	nativeVersionID := ""
 
 	if storageConfig.UseNativeObjectVersioning {
-		objectKey = path.Join(servicePrefix, artifactName)
-		versions, err := provider.ListObjectVersions(ctx, objectKey)
+		versions, err := provider.ListObjectVersions(ctx, servicePrefix+"/")
 		if err != nil {
 			return RestoreRetrieveOutcome{}, err
 		}
-		if len(versions) > 0 {
-			versioning.SortByLastModifiedDesc(versions)
-			if selectedVersion == "" || selectedVersion == "latest" {
-				nativeVersionID = versions[0].VersionID
-				objectTime = versions[0].LastModified
-				selectedVersion = "latest"
-			} else {
-				foundVersion := false
-				for _, versionObject := range versions {
-					if versionObject.VersionID == selectedVersion {
-						nativeVersionID = selectedVersion
-						objectTime = versionObject.LastModified
-						foundVersion = true
-						break
-					}
-				}
-				if !foundVersion {
-					return RestoreRetrieveOutcome{}, fmt.Errorf("native object version %q not found for service %s", selectedVersion, resolved.Service.Name)
-				}
-			}
-		} else if selectedVersion != "" && selectedVersion != "latest" {
-			return RestoreRetrieveOutcome{}, fmt.Errorf("native object versions not found for service %s", resolved.Service.Name)
+		if len(versions) == 0 {
+			return RestoreRetrieveOutcome{}, fmt.Errorf("no backup versions found for service %s", serviceID)
+		}
+
+		selectedObject, foundObject := selectNativeRestoreObject(versions, selectedVersion)
+		if !foundObject {
+			return RestoreRetrieveOutcome{}, fmt.Errorf("native object version %q not found for service %s", selectedVersion, serviceID)
+		}
+
+		objectKey = selectedObject.Key
+		nativeVersionID = selectedObject.VersionID
+		objectTime = selectedObject.LastModified
+
+		if selectedVersion == "latest" {
+			selectedVersion = resolveNativeVersionNumber(versions, selectedObject)
+		} else if strings.TrimSpace(selectedObject.VersionID) != "" {
+			selectedVersion = selectedObject.VersionID
 		}
 	} else {
 		objects, err := provider.ListObjects(ctx, servicePrefix+"/")
 		if err != nil {
 			return RestoreRetrieveOutcome{}, err
 		}
+		if len(objects) == 0 {
+			return RestoreRetrieveOutcome{}, fmt.Errorf("no backup versions found for service %s", serviceID)
+		}
 
-		if selectedVersion == "" || selectedVersion == "latest" {
+		if selectedVersion == "latest" {
 			selectedVersion, err = versioning.SelectLatestVersion(objects, servicePrefix)
 			if err != nil {
 				return RestoreRetrieveOutcome{}, err
 			}
 		}
 
-		objectKey = path.Join(servicePrefix, selectedVersion, artifactName)
-
-		for _, object := range objects {
-			if object.Key == objectKey {
-				objectTime = object.LastModified
-				break
-			}
+		selectedObject, foundObject := selectVersionedRestoreObject(objects, servicePrefix, selectedVersion)
+		if !foundObject {
+			return RestoreRetrieveOutcome{}, fmt.Errorf("backup version %q not found for service %s", selectedVersion, serviceID)
 		}
+
+		objectKey = selectedObject.Key
+		objectTime = selectedObject.LastModified
 	}
 
 	versionLabel := selectedVersion
 	if versionLabel == "" {
 		versionLabel = "native"
 	}
-	extension := artifactExtension(artifactName)
-	downloadName := fmt.Sprintf("%s-backup-%s-%s.%s", resolved.Service.Name, objectTime.Format("20060102-150405"), versionLabel, extension)
+
+	extension := extractObjectExtension(objectKey)
+	downloadName := fmt.Sprintf("%s-backup-%s-%s.%s", serviceID, objectTime.Format("20060102-150405"), versionLabel, extension)
 	destination := filepath.Join(".", downloadName)
 
 	if err := provider.Get(ctx, objectKey, nativeVersionID, destination); err != nil {
@@ -946,12 +934,78 @@ func checksumFileSHA256Base64(path string) (string, error) {
 	return base64.StdEncoding.EncodeToString(hasher.Sum(nil)), nil
 }
 
-func artifactExtension(fileName string) string {
-	idx := strings.Index(fileName, ".")
-	if idx < 0 {
+func selectNativeRestoreObject(versions []storage.ObjectInfo, requestedVersion string) (storage.ObjectInfo, bool) {
+	if len(versions) == 0 {
+		return storage.ObjectInfo{}, false
+	}
+
+	candidates := append([]storage.ObjectInfo{}, versions...)
+	versioning.SortByLastModifiedDesc(candidates)
+
+	if requestedVersion == "latest" {
+		return candidates[0], true
+	}
+
+	for _, candidate := range candidates {
+		if candidate.VersionID == requestedVersion {
+			return candidate, true
+		}
+	}
+	return storage.ObjectInfo{}, false
+}
+
+func selectVersionedRestoreObject(objects []storage.ObjectInfo, servicePrefix string, requestedVersion string) (storage.ObjectInfo, bool) {
+	candidates := make([]storage.ObjectInfo, 0, len(objects))
+	for _, object := range objects {
+		if versioning.ExtractVersionFromKey(object.Key, servicePrefix) == requestedVersion {
+			candidates = append(candidates, object)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return storage.ObjectInfo{}, false
+	}
+
+	versioning.SortByLastModifiedDesc(candidates)
+	return candidates[0], true
+}
+
+func resolveNativeVersionNumber(versions []storage.ObjectInfo, selected storage.ObjectInfo) string {
+	if len(versions) == 0 {
+		return "1"
+	}
+
+	ordered := append([]storage.ObjectInfo{}, versions...)
+	sort.Slice(ordered, func(i int, j int) bool {
+		if ordered[i].LastModified.Equal(ordered[j].LastModified) {
+			if ordered[i].Key == ordered[j].Key {
+				return ordered[i].VersionID < ordered[j].VersionID
+			}
+			return ordered[i].Key < ordered[j].Key
+		}
+		return ordered[i].LastModified.Before(ordered[j].LastModified)
+	})
+
+	for index, object := range ordered {
+		if object.Key == selected.Key && object.VersionID == selected.VersionID && object.LastModified.Equal(selected.LastModified) {
+			return strconv.Itoa(index + 1)
+		}
+	}
+
+	return strconv.Itoa(len(ordered))
+}
+
+func extractObjectExtension(objectKey string) string {
+	ext := strings.TrimSpace(path.Ext(objectKey))
+	if ext == "" {
 		return "bin"
 	}
-	return fileName[idx+1:]
+
+	trimmed := strings.TrimPrefix(ext, ".")
+	if trimmed == "" {
+		return "bin"
+	}
+	return trimmed
 }
 
 func buildBackupObjects(objects []storage.ObjectInfo, servicePrefix string, useNativeObjectVersioning bool, storageName string) []BackupObject {

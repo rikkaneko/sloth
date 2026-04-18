@@ -870,6 +870,235 @@ func TestListRemoteServiceIDGroupsBackupsByStorage(t *testing.T) {
 	}
 }
 
+func TestRestoreRetrieveWithoutServiceConfigUsesDefaultStorage(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mainConfigPath := filepath.Join(homeDir, ".config", "sloth", "main.yaml")
+	if err := os.MkdirAll(filepath.Dir(mainConfigPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{
+				Key:          "backup/app/1/app-backup.sql",
+				LastModified: time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC),
+			},
+			{
+				Key:          "backup/app/2/app-backup.sql",
+				LastModified: time.Date(2026, 4, 19, 1, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	manager := Manager{
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 19, 2, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.RestoreRetrieve(context.Background(), RestoreRetrieveOptions{
+		ServiceID: "app",
+		Version:   "latest",
+	})
+	if err != nil {
+		t.Fatalf("restore retrieve: %v", err)
+	}
+
+	if provider.getKey != "backup/app/2/app-backup.sql" {
+		t.Fatalf("expected latest object key, got %q", provider.getKey)
+	}
+	if provider.getVersionID != "" {
+		t.Fatalf("expected empty native version id for non-native storage, got %q", provider.getVersionID)
+	}
+	if outcome.Version != "2" {
+		t.Fatalf("expected resolved version 2, got %q", outcome.Version)
+	}
+	if !strings.HasSuffix(outcome.DownloadedPath, "-2.sql") {
+		t.Fatalf("expected sql extension and version suffix in download path, got %q", outcome.DownloadedPath)
+	}
+	if len(provider.listObjectsPrefixes) != 1 || provider.listObjectsPrefixes[0] != "backup/app/" {
+		t.Fatalf("expected list prefix backup/app/, got %+v", provider.listObjectsPrefixes)
+	}
+}
+
+func TestRestoreRetrieveWithoutServiceConfigNativeVersioning(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mainConfigPath := filepath.Join(homeDir, ".config", "sloth", "main.yaml")
+	if err := os.MkdirAll(filepath.Dir(mainConfigPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: true\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedVersions: []storage.ObjectInfo{
+			{
+				Key:          "backup/app/app-backup.tar",
+				VersionID:    "v1",
+				LastModified: time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC),
+			},
+			{
+				Key:          "backup/app/app-backup.tar",
+				VersionID:    "v2",
+				LastModified: time.Date(2026, 4, 19, 1, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	manager := Manager{
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 19, 2, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.RestoreRetrieve(context.Background(), RestoreRetrieveOptions{
+		ServiceID: "app",
+		Version:   "v1",
+	})
+	if err != nil {
+		t.Fatalf("restore retrieve native: %v", err)
+	}
+
+	if provider.getKey != "backup/app/app-backup.tar" {
+		t.Fatalf("expected native key, got %q", provider.getKey)
+	}
+	if provider.getVersionID != "v1" {
+		t.Fatalf("expected native version id v1, got %q", provider.getVersionID)
+	}
+	if outcome.Version != "v1" {
+		t.Fatalf("expected output version v1, got %q", outcome.Version)
+	}
+	if !strings.HasSuffix(outcome.DownloadedPath, "-v1.tar") {
+		t.Fatalf("expected tar extension and native version suffix, got %q", outcome.DownloadedPath)
+	}
+	if len(provider.listVersionPrefixes) != 1 || provider.listVersionPrefixes[0] != "backup/app/" {
+		t.Fatalf("expected version list prefix backup/app/, got %+v", provider.listVersionPrefixes)
+	}
+}
+
+func TestRestoreRetrieveWithoutServiceConfigNativeLatestResolvesNumericVersion(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mainConfigPath := filepath.Join(homeDir, ".config", "sloth", "main.yaml")
+	if err := os.MkdirAll(filepath.Dir(mainConfigPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    region: us-east-1\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: true\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedVersions: []storage.ObjectInfo{
+			{
+				Key:          "backup/app/app-backup.tar",
+				VersionID:    "v1",
+				LastModified: time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC),
+			},
+			{
+				Key:          "backup/app/app-backup.tar",
+				VersionID:    "v2",
+				LastModified: time.Date(2026, 4, 19, 1, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	manager := Manager{
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 19, 2, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.RestoreRetrieve(context.Background(), RestoreRetrieveOptions{
+		ServiceID: "app",
+		Version:   "latest",
+	})
+	if err != nil {
+		t.Fatalf("restore retrieve native latest: %v", err)
+	}
+
+	if outcome.Version != "2" {
+		t.Fatalf("expected numeric latest version 2, got %q", outcome.Version)
+	}
+	if provider.getVersionID != "v2" {
+		t.Fatalf("expected native get version v2, got %q", provider.getVersionID)
+	}
+	if !strings.HasSuffix(outcome.DownloadedPath, "-2.tar") {
+		t.Fatalf("expected numeric version suffix in filename, got %q", outcome.DownloadedPath)
+	}
+}
+
 func checksumSHA256Base64(content []byte) string {
 	sum := sha256.Sum256(content)
 	return base64.StdEncoding.EncodeToString(sum[:])

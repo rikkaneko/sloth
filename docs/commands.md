@@ -62,9 +62,11 @@ sloth restore <service-id> [-v|--version <version-id|latest>] [-t|--type <type>]
 
 Behavior:
 - Downloads backup artifact to current directory.
+- Does not require a service entry in service config for retrieve stage; retrieval can run with `<service-id>` plus storage resolution (`--storage` or `default`).
 - Logs retrieve progress with:
-  - `[info] Retrieving backup for service <service-id> (Version <version>) ...`
+  - `[info] Retrieving backup for service <service-id> (Version <version-number>) ...`
   - `[info] Downloaded backup file to "<file-path>"`
+  - `<version-number>` is resolved to a numeric backup version (for example `1`, `2`, ...), not the literal string `latest`.
 - File naming format: `<service-id>-backup-<backup-time>-<version>.<suffix>`.
 - Prints operator guidance for container and volume cleanup before apply.
 - Local mode is explicit via `--local`.

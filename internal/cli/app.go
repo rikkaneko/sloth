@@ -328,7 +328,6 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	a.logger.Infof("Retrieving backup for service %s (Version %s) ...", serviceID, versionValue)
 	outcome, err := a.manager.RestoreRetrieve(ctx, orchestrator.RestoreRetrieveOptions{
 		ServiceID:     serviceID,
 		Version:       versionValue,
@@ -344,6 +343,7 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 		return err
 	}
 
+	a.logger.Infof("Retrieving backup for service %s (Version %s) ...", serviceID, outcome.Version)
 	a.logger.Infof("Downloaded backup file to %q", outcome.DownloadedPath)
 	a.logger.Warnf(outcome.Guidance)
 	return nil
