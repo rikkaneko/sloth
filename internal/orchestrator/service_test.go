@@ -722,10 +722,10 @@ func TestListRemoteGroupsServicesByStorage(t *testing.T) {
 		t.Fatalf("list remote: %v", err)
 	}
 
-	if len(outcome.RemoteServiceGroups) != 2 {
-		t.Fatalf("expected 2 non-empty storage groups, got %d", len(outcome.RemoteServiceGroups))
+	if len(outcome.RemoteServiceGroups) != 3 {
+		t.Fatalf("expected 3 storage groups, got %d", len(outcome.RemoteServiceGroups))
 	}
-	if outcome.RemoteServiceGroups[0].Storage != "archive" || outcome.RemoteServiceGroups[1].Storage != "default" {
+	if outcome.RemoteServiceGroups[0].Storage != "archive" || outcome.RemoteServiceGroups[1].Storage != "default" || outcome.RemoteServiceGroups[2].Storage != "empty" {
 		t.Fatalf("unexpected group order: %+v", outcome.RemoteServiceGroups)
 	}
 
@@ -738,6 +738,9 @@ func TestListRemoteGroupsServicesByStorage(t *testing.T) {
 	}
 	if archiveRows[0].ObjectKey != "backup/svc-a/2/svc-a.sql" {
 		t.Fatalf("expected latest object key for svc-a, got %q", archiveRows[0].ObjectKey)
+	}
+	if len(outcome.RemoteServiceGroups[2].Rows) != 0 {
+		t.Fatalf("expected empty storage group to have no rows, got %+v", outcome.RemoteServiceGroups[2].Rows)
 	}
 
 	if len(archiveProvider.listObjectsPrefixes) != 1 || archiveProvider.listObjectsPrefixes[0] != "backup/" {

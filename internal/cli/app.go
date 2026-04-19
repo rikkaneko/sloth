@@ -231,6 +231,11 @@ func (a App) runList(ctx context.Context, args []string) error {
 	}
 
 	if serviceID == "" {
+		if len(outcome.Services) == 0 {
+			fmt.Println("No service backup found")
+			return nil
+		}
+
 		rows := make([][]string, 0, len(outcome.Services))
 		for _, service := range outcome.Services {
 			storageName := strings.TrimSpace(service.Storage)
@@ -402,6 +407,10 @@ func printBackupObjectsTable(backups []orchestrator.BackupObject, showObjectKey 
 func printRemoteServiceGroups(groups []orchestrator.RemoteServiceGroup, showObjectKey bool) {
 	for _, group := range groups {
 		fmt.Printf("Storage: %s\n", group.Storage)
+		if len(group.Rows) == 0 {
+			fmt.Println("No service backup found")
+			continue
+		}
 
 		headers := []string{"service", "last_backup"}
 		rows := make([][]string, 0, len(group.Rows))

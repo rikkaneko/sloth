@@ -104,6 +104,7 @@ List configured services:
 ```bash
 sloth list
 ```
+If no local services/backups are available, sloth prints plain status text `No service backup found`.
 
 List backups for a service:
 ```bash

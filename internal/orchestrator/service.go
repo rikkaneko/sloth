@@ -409,10 +409,6 @@ func (m Manager) listRemote(ctx context.Context, serviceID string) (ListOutcome,
 			}
 
 			rows := buildRemoteServiceRows(objects, basePath)
-			if len(rows) == 0 {
-				continue
-			}
-
 			groups = append(groups, RemoteServiceGroup{
 				Storage: storageName,
 				Rows:    rows,

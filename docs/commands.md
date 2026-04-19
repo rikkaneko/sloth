@@ -45,6 +45,7 @@ sloth list [--remote] [<service-id>] [--show-object-key] [-d|--debug]
 Behavior:
 - Without `<service-id>`: lists configured services using columns `service`, `type`, `storage`, `last_backup`.
 - Empty service storage values are rendered as `default`.
+- If no local services/backups are available, prints plain status text `No service backup found` (no warn prefix/color).
 - With `<service-id>`: lists backup objects/versions for that service using the same solid-border table style.
 - Backup object `size` is rendered in human-readable format.
 - `object_key` is hidden by default; include `--show-object-key` to show it.
@@ -52,7 +53,8 @@ Behavior:
   Output is grouped by storage section as `Storage: <storage-name>`, one table per storage.
   - `sloth list --remote`: columns `service`, `last_backup` (plus `object_key` when `--show-object-key`).
   - `sloth list --remote <service-id>`: columns `version`, `last_modified`, `size` (plus `object_key` when `--show-object-key`).
-  - Storages with no matching rows are omitted.
+  - `sloth list --remote` shows every available storage section; empty storages print plain status text `No service backup found`.
+  - `sloth list --remote <service-id>` omits storages with no matching backup rows.
 - `--debug` shows storage API call details.
 
 ## restore stage 1 (retrieve)

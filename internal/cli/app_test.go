@@ -190,6 +190,27 @@ func TestRunListWithoutServiceIDRemovesContainerColumnAndShowsDefaultStorage(t *
 	assertNotContains(t, output, "| container ")
 }
 
+func TestRunListWithoutServiceIDShowsMessageWhenEmpty(t *testing.T) {
+	manager := &fakeManager{
+		listOutcome: orchestrator.ListOutcome{
+			Services: []config.ServiceEntry{},
+		},
+	}
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list"})
+	})
+	if err != nil {
+		t.Fatalf("run list empty: %v", err)
+	}
+
+	assertContains(t, output, "No service backup found")
+	assertNotContains(t, output, "[warn] No service backup found")
+	assertNotContains(t, output, "| service ")
+}
+
 func TestRunListWithServiceIDUsesSolidTable(t *testing.T) {
 	manager := &fakeManager{
 		listOutcome: orchestrator.ListOutcome{
@@ -271,6 +292,10 @@ func TestRunListRemoteGroupedByStorage(t *testing.T) {
 						},
 					},
 				},
+				{
+					Storage: "empty",
+					Rows:    []orchestrator.RemoteServiceRow{},
+				},
 			},
 		},
 	}
@@ -291,8 +316,10 @@ func TestRunListRemoteGroupedByStorage(t *testing.T) {
 
 	assertContains(t, output, "Storage: archive")
 	assertContains(t, output, "Storage: default")
+	assertContains(t, output, "Storage: empty")
 	assertContains(t, output, "| service ")
 	assertContains(t, output, "| last_backup ")
+	assertContains(t, output, "No service backup found")
 	assertNotContains(t, output, "object_key")
 }
 
@@ -376,6 +403,39 @@ func TestRunListRemoteServiceIDGroupedByStorage(t *testing.T) {
 	assertContains(t, output, "| version ")
 	assertContains(t, output, "4.0 KB")
 	assertContains(t, output, "1.0 KB")
+}
+
+func TestRunListRemoteAllStoragesEmptyShowsPerStorageMessage(t *testing.T) {
+	manager := &fakeManager{
+		listOutcome: orchestrator.ListOutcome{
+			RemoteServiceGroups: []orchestrator.RemoteServiceGroup{
+				{
+					Storage: "archive",
+					Rows:    []orchestrator.RemoteServiceRow{},
+				},
+				{
+					Storage: "default",
+					Rows:    []orchestrator.RemoteServiceRow{},
+				},
+			},
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list", "--remote"})
+	})
+	if err != nil {
+		t.Fatalf("run list remote all empty: %v", err)
+	}
+
+	assertContains(t, output, "Storage: archive")
+	assertContains(t, output, "Storage: default")
+	assertContains(t, output, "No service backup found")
+	assertNotContains(t, output, "[warn] No service backup found")
+	assertNotContains(t, output, "| service ")
 }
 
 func assertNotContains(t *testing.T, output string, unexpected string) {
