@@ -13,7 +13,11 @@ sloth list --help
 Behavior:
 - Help output uses sectioned command descriptions and includes dynamic available values for `--type`, `--engine`, and `--storage`.
 - `--type` values come from embedded module YAML definitions plus `volume`.
-- `--storage` values are discovered from `~/.config/sloth/main.yaml`; if unavailable, help still prints with a graceful notice.
+- `--storage` values are discovered from active config home `<config-home>/main.yaml`; if unavailable, help still prints with a graceful notice.
+- Global options (must appear before subcommand):
+  - `-C, --config-home <dir>`: config home directory (default: `~/.config/sloth`)
+  - `-S, --sudo`: prepend privileged program for container runtime commands
+  - `--sudo-program <cmd>`: privileged program name (default: `sudo`)
 
 ## backup
 ```bash
@@ -21,11 +25,12 @@ sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <conta
 ```
 
 Behavior:
-- If service is missing and `--type` is provided, sloth writes `./.sloth.yaml` with the new service entry.
+- If service is missing and `--type` is provided, sloth writes `<config-home>/service.yaml` with the new service entry.
 - If `--container-name` is omitted, sloth probes containers by `<service-id>`.
 - If `--engine` is omitted, sloth checks `podman` then `docker`.
 - Supported `--engine` values: `docker`, `podman`.
 - Local mode is explicit via `--local` (do not use `--engine local`).
+- With global `--sudo`, sloth prepends `<sudo-program>` to docker/podman commands used in backup execution paths.
 - `--debug` shows external command output and S3 request/response summaries.
 - After backup upload completes, output prints the same backup table format as `sloth list <service-id>`.
 - Delta check mode:
@@ -49,7 +54,7 @@ Behavior:
 - With `<service-id>`: lists backup objects/versions for that service using the same solid-border table style.
 - Backup object `size` is rendered in human-readable format.
 - `object_key` is hidden by default; include `--show-object-key` to show it.
-- With `--remote`: query all configured storages from `~/.config/sloth/main.yaml`.
+- With `--remote`: query all configured storages from active config home `<config-home>/main.yaml`.
   Output is grouped by storage section as `Storage: <storage-name>`, one table per storage.
   - `sloth list --remote`: columns `service`, `last_backup` (plus `object_key` when `--show-object-key`).
   - `sloth list --remote <service-id>`: columns `version`, `last_modified`, `size` (plus `object_key` when `--show-object-key`).
@@ -81,6 +86,7 @@ sloth restore <service-id> -a|--apply <backup-data-file> [-t|--type <type>] [-c|
 
 Behavior:
 - Applies local file to the target service using the module restore flow.
+- With global `--sudo`, sloth prepends `<sudo-program>` to docker/podman commands used in restore-apply execution paths.
 - Redis restore is guided/manual: dump is copied to `/data/dump.rdb`; restart is required.
 - For local Redis restore, set `REDIS_RDB_PATH` (or service meta `redis_rdb_path`) to control destination path before restart.
 

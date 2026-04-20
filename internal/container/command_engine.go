@@ -13,15 +13,23 @@ import (
 )
 
 type CommandEngine struct {
-	binary string
+	binary  string
+	runtime RuntimeOptions
 }
 
-func NewCommandEngine(binary string) CommandEngine {
-	return CommandEngine{binary: binary}
+func NewCommandEngine(binary string, runtime RuntimeOptions) CommandEngine {
+	return CommandEngine{binary: binary, runtime: runtime}
 }
 
 func (e CommandEngine) Name() string {
 	return e.binary
+}
+
+func (e CommandEngine) RuntimeCommand() string {
+	if !e.runtime.UseSudo {
+		return shellEscapeToken(e.binary)
+	}
+	return shellEscapeToken(e.runtime.NormalizeSudoProgram()) + " " + shellEscapeToken(e.binary)
 }
 
 func (e CommandEngine) ContainerExists(ctx context.Context, containerName string) (bool, error) {
@@ -33,10 +41,11 @@ func (e CommandEngine) ContainerExists(ctx context.Context, containerName string
 	}
 
 	args := []string{"container", "inspect", containerName}
-	cmd := exec.CommandContext(ctx, e.binary, args...)
+	invocationBinary, invocationArgs := e.buildInvocation(args)
+	cmd := exec.CommandContext(ctx, invocationBinary, invocationArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	ui.Debugf("run_cmd %s", renderCommand(e.binary, args))
+	ui.Debugf("run_cmd %s", renderCommand(invocationBinary, invocationArgs))
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if ok := asExitError(err, &exitErr); ok {
@@ -58,13 +67,14 @@ func (e CommandEngine) Exec(ctx context.Context, containerName string, command s
 	}
 	args = append(args, containerName, "sh", "-lc", command)
 
-	cmd := exec.CommandContext(ctx, e.binary, args...)
+	invocationBinary, invocationArgs := e.buildInvocation(args)
+	cmd := exec.CommandContext(ctx, invocationBinary, invocationArgs...)
 	cmd.Stdin = stdin
 	var stdoutBuffer bytes.Buffer
 	var stderrBuffer bytes.Buffer
 	cmd.Stdout = writerWithCapture(stdout, &stdoutBuffer)
 	cmd.Stderr = writerWithCapture(stderr, &stderrBuffer)
-	ui.Debugf("run_cmd %s", renderCommand(e.binary, args))
+	ui.Debugf("run_cmd %s", renderCommand(invocationBinary, invocationArgs))
 
 	if err := cmd.Run(); err != nil {
 		logCommandOutput(stdoutBuffer.String(), stderrBuffer.String())
@@ -81,10 +91,11 @@ func (e CommandEngine) Exec(ctx context.Context, containerName string, command s
 
 func (e CommandEngine) CopyFrom(ctx context.Context, containerName string, sourcePath string, destPath string) error {
 	args := []string{"cp", fmt.Sprintf("%s:%s", containerName, sourcePath), destPath}
-	cmd := exec.CommandContext(ctx, e.binary, args...)
+	invocationBinary, invocationArgs := e.buildInvocation(args)
+	cmd := exec.CommandContext(ctx, invocationBinary, invocationArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	ui.Debugf("run_cmd %s", renderCommand(e.binary, args))
+	ui.Debugf("run_cmd %s", renderCommand(invocationBinary, invocationArgs))
 
 	if err := cmd.Run(); err != nil {
 		logCommandOutput("", stderr.String())
@@ -96,10 +107,11 @@ func (e CommandEngine) CopyFrom(ctx context.Context, containerName string, sourc
 
 func (e CommandEngine) CopyTo(ctx context.Context, containerName string, sourcePath string, destPath string) error {
 	args := []string{"cp", sourcePath, fmt.Sprintf("%s:%s", containerName, destPath)}
-	cmd := exec.CommandContext(ctx, e.binary, args...)
+	invocationBinary, invocationArgs := e.buildInvocation(args)
+	cmd := exec.CommandContext(ctx, invocationBinary, invocationArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	ui.Debugf("run_cmd %s", renderCommand(e.binary, args))
+	ui.Debugf("run_cmd %s", renderCommand(invocationBinary, invocationArgs))
 
 	if err := cmd.Run(); err != nil {
 		logCommandOutput("", stderr.String())
@@ -165,4 +177,18 @@ func logCommandOutput(stdout string, stderr string) {
 
 func renderCommand(binary string, args []string) string {
 	return strings.TrimSpace(binary + " " + strings.Join(args, " "))
+}
+
+func (e CommandEngine) buildInvocation(args []string) (string, []string) {
+	if !e.runtime.UseSudo {
+		return e.binary, args
+	}
+	combined := make([]string, 0, len(args)+1)
+	combined = append(combined, e.binary)
+	combined = append(combined, args...)
+	return e.runtime.NormalizeSudoProgram(), combined
+}
+
+func shellEscapeToken(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

@@ -20,10 +20,11 @@ go build -ldflags "-X main.Version=1.0.0" -o bin/sloth ./cmd/sloth
 
 ## Environment Configuration
 Sloth reads configuration from:
-- Main config: `~/.config/sloth/main.yaml`
-- Service config: `~/.config/sloth/service.yaml`
-- Fallback service config: `./.sloth.yaml` (used only when home service config does not exist)
+- Main config: `<config-home>/main.yaml`
+- Service config: `<config-home>/service.yaml`
 - Environment file: `.env` by default, or `--env <path>`
+
+Default config home is `~/.config/sloth`. Override it globally with `--config-home <dir>` (or `-C <dir>`).
 
 Main config example:
 ```yaml
@@ -75,7 +76,7 @@ service:
 sloth backup app-db -t mysql
 ```
 
-This command will also create a service config (`.sloth.yaml`) in the current working directory.
+This command will also create a service config entry in `<config-home>/service.yaml`.
 
 ### Create a backup on existing service config:
 
@@ -87,6 +88,19 @@ sloth backup app-db
 
 ```bash
 sloth backup app-db --use-file-size-check
+```
+
+### Use a custom config home globally
+
+```bash
+sloth -C /tmp/sloth-config backup app-db -t mysql
+```
+
+### Run backup/restore-apply container commands with privilege elevation
+
+```bash
+sloth -S backup app-db
+sloth -S --sudo-program doas restore app-db --apply ./app-db-backup.sql
 ```
 
 ### Create a backup for a MySQL database running in the host

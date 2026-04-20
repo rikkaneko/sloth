@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	homeMainConfigRelPath    = ".config/sloth/main.yaml"
-	homeServiceConfigRelPath = ".config/sloth/service.yaml"
-	localServiceConfigPath   = ".sloth.yaml"
+	defaultConfigHomeRelPath = ".config/sloth"
+	mainConfigFileName       = "main.yaml"
+	serviceConfigFileName    = "service.yaml"
 )
+
+var configHomeOverride string
 
 type ServiceConfig struct {
 	Service []ServiceEntry `yaml:"service"`
@@ -62,16 +64,15 @@ type ServiceLoadResult struct {
 }
 
 func LoadMainConfig() (MainConfig, string, error) {
-	home, err := os.UserHomeDir()
+	path, err := resolveMainConfigPath()
 	if err != nil {
-		return MainConfig{}, "", fmt.Errorf("resolve user home: %w", err)
+		return MainConfig{}, "", err
 	}
-	path := filepath.Join(home, homeMainConfigRelPath)
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return MainConfig{}, "", fmt.Errorf("read main config: %w", err)
 	}
-
 	var cfg MainConfig
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return MainConfig{}, "", fmt.Errorf("parse main config yaml: %w", err)
@@ -84,29 +85,19 @@ func LoadMainConfig() (MainConfig, string, error) {
 }
 
 func LoadServiceConfig() (ServiceLoadResult, error) {
-	home, err := os.UserHomeDir()
+	path, err := resolveServiceConfigPath()
 	if err != nil {
-		return ServiceLoadResult{}, fmt.Errorf("resolve user home: %w", err)
+		return ServiceLoadResult{}, err
 	}
 
-	homePath := filepath.Join(home, homeServiceConfigRelPath)
-	if _, err := os.Stat(homePath); err == nil {
-		cfg, err := readServiceConfig(homePath)
-		if err != nil {
-			return ServiceLoadResult{}, err
+	cfg, err := readServiceConfig(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ServiceLoadResult{Config: ServiceConfig{}, Source: path}, nil
 		}
-		return ServiceLoadResult{Config: cfg, Source: homePath}, nil
+		return ServiceLoadResult{}, err
 	}
-
-	if _, err := os.Stat(localServiceConfigPath); err == nil {
-		cfg, err := readServiceConfig(localServiceConfigPath)
-		if err != nil {
-			return ServiceLoadResult{}, err
-		}
-		return ServiceLoadResult{Config: cfg, Source: localServiceConfigPath}, nil
-	}
-
-	return ServiceLoadResult{Config: ServiceConfig{}, Source: localServiceConfigPath}, nil
+	return ServiceLoadResult{Config: cfg, Source: path}, nil
 }
 
 func readServiceConfig(path string) (ServiceConfig, error) {
@@ -238,7 +229,11 @@ func (cfg MainConfig) FindStorage(name string) (StorageConfig, bool) {
 
 func SaveServiceConfig(path string, cfg ServiceConfig) error {
 	if path == "" {
-		path = localServiceConfigPath
+		resolvedPath, err := resolveServiceConfigPath()
+		if err != nil {
+			return err
+		}
+		path = resolvedPath
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -271,4 +266,62 @@ func NormalizeBasePath(basePath string) string {
 	cleaned = strings.TrimPrefix(cleaned, "/")
 	cleaned = strings.TrimSuffix(cleaned, "/")
 	return cleaned
+}
+
+func SetConfigHomeOverride(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		configHomeOverride = ""
+		return nil
+	}
+
+	resolved, err := resolveInputPath(trimmed)
+	if err != nil {
+		return err
+	}
+
+	configHomeOverride = resolved
+	return nil
+}
+
+func ResolveConfigHome() (string, error) {
+	if strings.TrimSpace(configHomeOverride) != "" {
+		return configHomeOverride, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user home: %w", err)
+	}
+	return filepath.Join(home, defaultConfigHomeRelPath), nil
+}
+
+func resolveMainConfigPath() (string, error) {
+	configHome, err := ResolveConfigHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configHome, mainConfigFileName), nil
+}
+
+func resolveServiceConfigPath() (string, error) {
+	configHome, err := ResolveConfigHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configHome, serviceConfigFileName), nil
+}
+
+func resolveInputPath(path string) (string, error) {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user home: %w", err)
+		}
+		if path == "~" {
+			return home, nil
+		}
+		return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
+	}
+	return filepath.Clean(path), nil
 }

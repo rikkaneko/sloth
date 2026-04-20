@@ -16,6 +16,10 @@ func (s *stubEngine) Name() string {
 	return s.name
 }
 
+func (s *stubEngine) RuntimeCommand() string {
+	return s.name
+}
+
 func (s *stubEngine) ContainerExists(ctx context.Context, containerName string) (bool, error) {
 	s.checked = append(s.checked, containerName)
 	return s.exists[containerName], nil
@@ -42,7 +46,7 @@ func TestResolveEngineAutoDetectUsesServiceIDWhenContainerMissing(t *testing.T) 
 	podman := &stubEngine{name: "podman", exists: map[string]bool{"svc": true}}
 	docker := &stubEngine{name: "docker", exists: map[string]bool{}}
 
-	engineFactory = func(name string) (Engine, error) {
+	engineFactory = func(name string, runtime RuntimeOptions) (Engine, error) {
 		if name == "podman" {
 			return podman, nil
 		}
@@ -52,7 +56,7 @@ func TestResolveEngineAutoDetectUsesServiceIDWhenContainerMissing(t *testing.T) 
 		return &stubEngine{name: name, exists: map[string]bool{}}, nil
 	}
 
-	resolution, err := ResolveEngine(context.Background(), "", "", "", "", "svc", false)
+	resolution, err := ResolveEngine(context.Background(), "", "", "", "", "svc", false, RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("resolve engine: %v", err)
 	}
@@ -66,14 +70,14 @@ func TestResolveEngineAutoDetectUsesServiceIDWhenContainerMissing(t *testing.T) 
 }
 
 func TestResolveEngineRejectsExplicitLocalEngine(t *testing.T) {
-	_, err := ResolveEngine(context.Background(), "local", "", "", "", "svc", false)
+	_, err := ResolveEngine(context.Background(), "local", "", "", "", "svc", false, RuntimeOptions{})
 	if err == nil {
 		t.Fatalf("expected error for --engine local")
 	}
 }
 
 func TestResolveEngineForceLocal(t *testing.T) {
-	resolution, err := ResolveEngine(context.Background(), "", "", "", "", "svc", true)
+	resolution, err := ResolveEngine(context.Background(), "", "", "", "", "svc", true, RuntimeOptions{})
 	if err != nil {
 		t.Fatalf("resolve local engine: %v", err)
 	}

@@ -102,6 +102,35 @@ func TestRunRootHelpGracefulWhenStorageConfigMissing(t *testing.T) {
 	assertContains(t, output, "Available storage names: unavailable")
 }
 
+func TestRunRootHelpUsesConfigHomeOverride(t *testing.T) {
+	homeDir := t.TempDir()
+	overrideConfigHome := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mainConfigPath := filepath.Join(overrideConfigHome, "main.yaml")
+	mainConfig := "storage:\n" +
+		"  - name: override\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    region: auto\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n"
+	if err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write override main config: %v", err)
+	}
+
+	app := NewApp("test")
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"-C", overrideConfigHome, "--help"})
+	})
+	if err != nil {
+		t.Fatalf("run root help with config home override: %v", err)
+	}
+
+	assertContains(t, output, "override")
+}
+
 func TestRunListHelpIncludesShowObjectKey(t *testing.T) {
 	app := NewApp("test")
 	output, err := runWithCapturedStdout(t, func() error {

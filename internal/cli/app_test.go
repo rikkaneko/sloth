@@ -161,6 +161,67 @@ func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	assertNotContains(t, output, "service=")
 }
 
+func TestRunBackupForwardsGlobalSudoFlagsAndPreservesSubcommandShortFlags(t *testing.T) {
+	manager := &fakeManager{
+		backupOutcome: orchestrator.BackupOutcome{ServiceID: "svc"},
+		listOutcome: orchestrator.ListOutcome{
+			Backups: []orchestrator.BackupObject{
+				{
+					Key:          "backup/svc/1/svc.sql",
+					Version:      "1",
+					Size:         128,
+					LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(
+			context.Background(),
+			[]string{"-S", "--sudo-program", "doas", "backup", "svc", "-c", "svc-db", "-s", "archive"},
+		)
+	})
+	if err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	if !manager.backupOptions.UseSudo || manager.backupOptions.SudoProgram != "doas" {
+		t.Fatalf("expected sudo runtime options to be forwarded: %+v", manager.backupOptions)
+	}
+	if manager.backupOptions.ContainerName != "svc-db" || manager.backupOptions.Storage != "archive" {
+		t.Fatalf("expected subcommand short flags preserved: %+v", manager.backupOptions)
+	}
+}
+
+func TestRunRestoreApplyForwardsGlobalSudoFlags(t *testing.T) {
+	manager := &fakeManager{
+		restoreOutcome: orchestrator.RestoreApplyOutcome{
+			Engine: "docker",
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(
+			context.Background(),
+			[]string{"-S", "restore", "svc", "--apply", "./svc.sql"},
+		)
+	})
+	if err != nil {
+		t.Fatalf("run restore apply: %v", err)
+	}
+
+	if !manager.restoreOptions.UseSudo || manager.restoreOptions.SudoProgram != "sudo" {
+		t.Fatalf("expected restore apply sudo options: %+v", manager.restoreOptions)
+	}
+}
+
 func TestRunListWithoutServiceIDRemovesContainerColumnAndShowsDefaultStorage(t *testing.T) {
 	manager := &fakeManager{
 		listOutcome: orchestrator.ListOutcome{

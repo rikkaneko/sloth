@@ -68,11 +68,9 @@ Merge behavior:
 - Omitted fields keep built-in defaults.
 
 ## Local Service Config Behavior
-Service config load order is:
-1. `~/.config/sloth/service.yaml`
-2. `./.sloth.yaml` (fallback only if home service config does not exist)
+Service config path is at `<config-home>/service.yaml`
 
-This means local file does not currently overlay/merge home config entries.
+Default config home is `~/.config/sloth`; override with global CLI option `--config-home` (or `-C`).
 
 ## New Module Checklist
 - Add YAML in `internal/modules/yaml/`.

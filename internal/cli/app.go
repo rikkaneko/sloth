@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"sloth/internal/config"
 	"sloth/internal/orchestrator"
 	"sloth/internal/ui"
 )
@@ -29,6 +30,12 @@ type manager interface {
 	RestoreApply(ctx context.Context, options orchestrator.RestoreApplyOptions) (orchestrator.RestoreApplyOutcome, error)
 }
 
+type globalOptions struct {
+	ConfigHome  string
+	UseSudo     bool
+	SudoProgram string
+}
+
 func NewApp(version string) App {
 	normalizedVersion := resolveDisplayVersion(version)
 
@@ -40,51 +47,59 @@ func NewApp(version string) App {
 }
 
 func (a App) Run(ctx context.Context, args []string) error {
+	global, runArgs, err := parseGlobalOptions(args)
+	if err != nil {
+		return err
+	}
+	if err := config.SetConfigHomeOverride(global.ConfigHome); err != nil {
+		return err
+	}
+
 	a.printBanner()
 
-	if len(args) == 0 {
+	if len(runArgs) == 0 {
 		a.printRootHelp()
 		return nil
 	}
 
-	if isRootHelpArg(args[0]) {
+	if isRootHelpArg(runArgs[0]) {
 		a.printRootHelp()
 		return nil
 	}
 
-	if args[0] == "help" {
-		if len(args) == 1 {
+	if runArgs[0] == "help" {
+		if len(runArgs) == 1 {
 			a.printRootHelp()
 			return nil
 		}
-		return a.printCommandHelp(args[1])
+		return a.printCommandHelp(runArgs[1])
 	}
 
-	switch args[0] {
+	switch runArgs[0] {
 	case "backup":
-		if hasHelpFlag(args[1:]) {
+		if hasHelpFlag(runArgs[1:]) {
 			a.printBackupHelp()
 			return nil
 		}
-		return a.runBackup(ctx, args[1:])
+		return a.runBackup(ctx, runArgs[1:], global)
 	case "list":
-		if hasHelpFlag(args[1:]) {
+		if hasHelpFlag(runArgs[1:]) {
 			a.printListHelp()
 			return nil
 		}
-		return a.runList(ctx, args[1:])
+		return a.runList(ctx, runArgs[1:])
 	case "restore":
-		if hasHelpFlag(args[1:]) {
+		if hasHelpFlag(runArgs[1:]) {
 			a.printRestoreHelp()
 			return nil
 		}
-		return a.runRestore(ctx, args[1:])
+		return a.runRestore(ctx, runArgs[1:], global)
 	default:
-		return fmt.Errorf("unknown command %q", args[0])
+		return fmt.Errorf("unknown command %q", runArgs[0])
 	}
 }
 
-func (a App) runBackup(ctx context.Context, args []string) error {
+func (a App) runBackup(ctx context.Context, args []string, global globalOptions) error {
 	if len(args) == 0 {
 		return fmt.Errorf("backup requires <service-id>")
 	}
@@ -159,6 +174,8 @@ func (a App) runBackup(ctx context.Context, args []string) error {
 		ModuleConfig:  moduleConfig,
 		VolumeName:    volumeName,
 		VolumeNames:   volumeNames,
+		UseSudo:       global.UseSudo,
+		SudoProgram:   global.SudoProgram,
 	})
 	if err != nil {
 		return err
@@ -257,7 +274,7 @@ func (a App) runList(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (a App) runRestore(ctx context.Context, args []string) error {
+func (a App) runRestore(ctx context.Context, args []string, global globalOptions) error {
 	if len(args) == 0 {
 		return fmt.Errorf("restore requires <service-id>")
 	}
@@ -322,6 +339,8 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 			Storage:       storageName,
 			EnvFile:       envFile,
 			ModuleConfig:  moduleConfig,
+			UseSudo:       global.UseSudo,
+			SudoProgram:   global.SudoProgram,
 		})
 		if err != nil {
 			return err
@@ -352,6 +371,67 @@ func (a App) runRestore(ctx context.Context, args []string) error {
 	a.logger.Infof("Downloaded backup file to %q", outcome.DownloadedPath)
 	a.logger.Warnf(outcome.Guidance)
 	return nil
+}
+
+func parseGlobalOptions(args []string) (globalOptions, []string, error) {
+	global := globalOptions{
+		SudoProgram: "sudo",
+	}
+
+	index := 0
+	for index < len(args) {
+		arg := args[index]
+		if arg == "--" {
+			return global, args[index+1:], nil
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			break
+		}
+
+		switch {
+		case arg == "--config-home" || arg == "-C":
+			if index+1 >= len(args) {
+				return global, nil, fmt.Errorf("%s requires a value", arg)
+			}
+			value := strings.TrimSpace(args[index+1])
+			if value == "" {
+				return global, nil, fmt.Errorf("%s requires a non-empty value", arg)
+			}
+			global.ConfigHome = value
+			index += 2
+		case strings.HasPrefix(arg, "--config-home="):
+			value := strings.TrimSpace(strings.TrimPrefix(arg, "--config-home="))
+			if value == "" {
+				return global, nil, fmt.Errorf("--config-home requires a non-empty value")
+			}
+			global.ConfigHome = value
+			index++
+		case arg == "--sudo" || arg == "-S":
+			global.UseSudo = true
+			index++
+		case arg == "--sudo-program":
+			if index+1 >= len(args) {
+				return global, nil, fmt.Errorf("--sudo-program requires a value")
+			}
+			value := strings.TrimSpace(args[index+1])
+			if value == "" {
+				return global, nil, fmt.Errorf("--sudo-program requires a non-empty value")
+			}
+			global.SudoProgram = value
+			index += 2
+		case strings.HasPrefix(arg, "--sudo-program="):
+			value := strings.TrimSpace(strings.TrimPrefix(arg, "--sudo-program="))
+			if value == "" {
+				return global, nil, fmt.Errorf("--sudo-program requires a non-empty value")
+			}
+			global.SudoProgram = value
+			index++
+		default:
+			return global, args[index:], nil
+		}
+	}
+
+	return global, args[index:], nil
 }
 
 func (a App) printBanner() {

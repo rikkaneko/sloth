@@ -21,9 +21,10 @@ func ResolveEngine(
 	configuredContainerName string,
 	serviceID string,
 	forceLocal bool,
+	runtime RuntimeOptions,
 ) (Resolution, error) {
 	if forceLocal {
-		engine, err := engineFactory("local")
+		engine, err := engineFactory("local", runtime)
 		if err != nil {
 			return Resolution{}, err
 		}
@@ -40,7 +41,7 @@ func ResolveEngine(
 	containerName := chooseContainerName(explicitContainerName, configuredContainerName, serviceID)
 
 	if chosen != "" {
-		engine, err := engineFactory(chosen)
+		engine, err := engineFactory(chosen, runtime)
 		if err != nil {
 			return Resolution{}, err
 		}
@@ -55,7 +56,7 @@ func ResolveEngine(
 	}
 
 	for _, candidate := range []string{"podman", "docker"} {
-		engine, err := engineFactory(candidate)
+		engine, err := engineFactory(candidate, runtime)
 		if err != nil {
 			return Resolution{}, err
 		}

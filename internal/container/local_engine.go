@@ -18,6 +18,10 @@ func (LocalEngine) Name() string {
 	return "local"
 }
 
+func (LocalEngine) RuntimeCommand() string {
+	return "local"
+}
+
 func (LocalEngine) ContainerExists(ctx context.Context, containerName string) (bool, error) {
 	return false, nil
 }

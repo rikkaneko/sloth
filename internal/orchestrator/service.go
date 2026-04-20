@@ -78,6 +78,8 @@ type BackupOptions struct {
 	ModuleConfig  string
 	VolumeName    string
 	VolumeNames   []string
+	UseSudo       bool
+	SudoProgram   string
 }
 
 type BackupOutcome struct {
@@ -154,6 +156,8 @@ type RestoreApplyOptions struct {
 	Storage       string
 	EnvFile       string
 	ModuleConfig  string
+	UseSudo       bool
+	SudoProgram   string
 }
 
 type RestoreApplyOutcome struct {
@@ -195,6 +199,10 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		resolved.Service.ContainerName,
 		resolved.Service.Name,
 		options.Local,
+		container.RuntimeOptions{
+			UseSudo:     options.UseSudo,
+			SudoProgram: options.SudoProgram,
+		},
 	)
 	if err != nil {
 		return BackupOutcome{}, err
@@ -611,6 +619,10 @@ func (m Manager) RestoreApply(ctx context.Context, options RestoreApplyOptions) 
 		resolved.Service.ContainerName,
 		resolved.Service.Name,
 		options.Local,
+		container.RuntimeOptions{
+			UseSudo:     options.UseSudo,
+			SudoProgram: options.SudoProgram,
+		},
 	)
 	if err != nil {
 		return RestoreApplyOutcome{}, err
@@ -695,7 +707,7 @@ func resolveServiceForOperation(serviceID string, options serviceResolutionOptio
 			return resolvedService{}, fmt.Errorf("service %q not found", serviceID)
 		}
 		if strings.TrimSpace(options.Type) == "" {
-			return resolvedService{}, fmt.Errorf("service %q not found; provide --type to create local .sloth.yaml entry", serviceID)
+			return resolvedService{}, fmt.Errorf("service %q not found; provide --type to create service config entry", serviceID)
 		}
 
 		engineName := options.Engine
@@ -718,7 +730,6 @@ func resolveServiceForOperation(serviceID string, options serviceResolutionOptio
 		serviceLoad.Config.Service = append(serviceLoad.Config.Service, current)
 		idx = len(serviceLoad.Config.Service) - 1
 
-		serviceLoad.Source = ".sloth.yaml"
 		if err := config.SaveServiceConfig(serviceLoad.Source, serviceLoad.Config); err != nil {
 			return resolvedService{}, err
 		}

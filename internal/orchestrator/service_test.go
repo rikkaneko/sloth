@@ -173,8 +173,8 @@ func TestResolveServiceForOperationCreatesLocalConfig(t *testing.T) {
 	if resolved.Service.Name != "svc" {
 		t.Fatalf("expected service name svc, got %s", resolved.Service.Name)
 	}
-	if _, err := os.Stat(filepath.Join(workingDir, ".sloth.yaml")); err != nil {
-		t.Fatalf("expected .sloth.yaml to be created: %v", err)
+	if _, err := os.Stat(filepath.Join(homeDir, ".config", "sloth", "service.yaml")); err != nil {
+		t.Fatalf("expected service config file in default config home: %v", err)
 	}
 }
 
@@ -258,9 +258,9 @@ func TestBackupNonNativeUsesIncrementedVersion(t *testing.T) {
 		t.Fatalf("unexpected object key %s", provider.putKey)
 	}
 
-	savedConfig, err := os.ReadFile(filepath.Join(workingDir, ".sloth.yaml"))
+	savedConfig, err := os.ReadFile(filepath.Join(homeDir, ".config", "sloth", "service.yaml"))
 	if err != nil {
-		t.Fatalf("read saved local config: %v", err)
+		t.Fatalf("read saved service config: %v", err)
 	}
 	if !strings.Contains(string(savedConfig), "last_backup_time") {
 		t.Fatalf("expected last_backup_time to be persisted")
