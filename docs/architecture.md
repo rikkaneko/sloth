@@ -24,7 +24,7 @@ Sloth is a modular Go CLI organized around three runtime contracts:
 4. Resolve storage and compute object key:
    - Native versioning: `<base>/<service>/<artifact>`
    - Non-native versioning: `<base>/<service>/<version>/<artifact>`
-5. Upload artifact and persist `last_backup_time` in service config.
+5. Upload artifact and persist `last_backup_time` in service config as Unix timestamp seconds.
 6. Log major actions at `info` level; emit external command and storage API detail at `debug` level.
 
 ## Restore Flow

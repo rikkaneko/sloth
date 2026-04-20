@@ -26,7 +26,7 @@ service:
     container_name: container-name
     type: service-type
     storage: storage-name
-    last_backup_time: iso-time-string
+    last_backup_time: unix-timestamp-or-iso-time-string
 ```
 
 ### Main config (`~/.config/sloth/main.yaml`)

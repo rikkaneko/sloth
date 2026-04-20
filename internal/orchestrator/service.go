@@ -334,7 +334,7 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 	}
 	ui.Infof("Uploaded")
 
-	resolved.Service.LastBackupTime = m.now().Format(time.RFC3339)
+	resolved.Service.LastBackupTime = strconv.FormatInt(m.now().Unix(), 10)
 	if err := saveServiceResolution(resolved); err != nil {
 		return BackupOutcome{}, err
 	}

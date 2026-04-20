@@ -193,7 +193,7 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 		return err
 	}
 
-	fmt.Printf("\n%s", serviceID)
+	fmt.Printf("\n%s\n", serviceID)
 	printBackupObjectsTable(listOutcome.Backups, false)
 	return nil
 }
@@ -268,7 +268,7 @@ func (a App) runList(ctx context.Context, args []string) error {
 			if storageName == "" {
 				storageName = "default"
 			}
-			rows = append(rows, []string{service.Name, service.Type, storageName, service.LastBackupTime})
+			rows = append(rows, []string{service.Name, service.Type, storageName, config.FormatLastBackupTimeForDisplay(service.LastBackupTime)})
 		}
 		ui.PrintSolidTable([]string{"service", "type", "storage", "last_backup"}, rows)
 		return nil
@@ -279,7 +279,7 @@ func (a App) runList(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("%s", serviceID)
+	fmt.Printf("\n%s\n", serviceID)
 	printBackupObjectsTable(outcome.Backups, showObjectKey)
 	return nil
 }
@@ -441,7 +441,7 @@ func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 
 func (a App) printBanner() {
 	fmt.Println("Copyright (c) rikkaneko <rikkaneko23@gmail.com>")
-	fmt.Printf("Sloth CLI (version %s, go %s)\n\n", a.version, runtime.Version())
+	fmt.Printf("Sloth CLI (version %s, go %s)\n", a.version, runtime.Version())
 }
 
 func splitCSV(raw string) []string {

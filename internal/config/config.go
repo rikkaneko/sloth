@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -186,6 +188,9 @@ func (cfg ServiceConfig) Validate() error {
 		if s.Type == "" {
 			return fmt.Errorf("service[%s] type is required", s.Name)
 		}
+		if _, err := ParseLastBackupTime(s.LastBackupTime); err != nil {
+			return fmt.Errorf("service[%s] last_backup_time invalid: %w", s.Name, err)
+		}
 	}
 	return nil
 }
@@ -324,4 +329,35 @@ func resolveInputPath(path string) (string, error) {
 		return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 	}
 	return filepath.Clean(path), nil
+}
+
+func ParseLastBackupTime(value string) (time.Time, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, nil
+	}
+
+	unixSeconds, err := strconv.ParseInt(trimmed, 10, 64)
+	if err == nil {
+		return time.Unix(unixSeconds, 0).UTC(), nil
+	}
+
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("use unix timestamp or RFC3339: %w", err)
+	}
+	return parsed, nil
+}
+
+func FormatLastBackupTimeForDisplay(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	parsed, err := ParseLastBackupTime(trimmed)
+	if err != nil || parsed.IsZero() {
+		return trimmed
+	}
+	return parsed.Format(time.RFC3339)
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadServiceConfigUsesDefaultConfigHomePath(t *testing.T) {
@@ -229,5 +230,75 @@ func TestResolveConfigHomeUsesOverride(t *testing.T) {
 	}
 	if configHome != "/tmp/sloth-config" {
 		t.Fatalf("expected /tmp/sloth-config, got %s", configHome)
+	}
+}
+
+func TestServiceConfigValidateAcceptsLastBackupTimeUnixAndISO(t *testing.T) {
+	cfg := ServiceConfig{
+		Service: []ServiceEntry{
+			{
+				Name:           "svc-unix",
+				Type:           "mysql",
+				LastBackupTime: "1713355200",
+			},
+			{
+				Name:           "svc-iso",
+				Type:           "pgsql",
+				LastBackupTime: "2026-04-20T08:00:00Z",
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate service config with unix and iso last_backup_time: %v", err)
+	}
+}
+
+func TestServiceConfigValidateRejectsInvalidLastBackupTime(t *testing.T) {
+	cfg := ServiceConfig{
+		Service: []ServiceEntry{
+			{
+				Name:           "svc",
+				Type:           "mysql",
+				LastBackupTime: "not-a-time",
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid last_backup_time error")
+	}
+}
+
+func TestFormatLastBackupTimeForDisplaySupportsUnixAndISO(t *testing.T) {
+	unixDisplay := FormatLastBackupTimeForDisplay("1713355200")
+	if unixDisplay != "2024-04-17T12:00:00Z" {
+		t.Fatalf("unexpected unix display value: %s", unixDisplay)
+	}
+
+	isoDisplay := FormatLastBackupTimeForDisplay("2026-04-20T08:00:00Z")
+	if isoDisplay != "2026-04-20T08:00:00Z" {
+		t.Fatalf("unexpected iso display value: %s", isoDisplay)
+	}
+}
+
+func TestParseLastBackupTimeReturnsZeroForEmpty(t *testing.T) {
+	parsed, err := ParseLastBackupTime("")
+	if err != nil {
+		t.Fatalf("parse empty last_backup_time: %v", err)
+	}
+	if !parsed.IsZero() {
+		t.Fatalf("expected zero time for empty value")
+	}
+}
+
+func TestParseLastBackupTimeParsesUnix(t *testing.T) {
+	parsed, err := ParseLastBackupTime("1713355200")
+	if err != nil {
+		t.Fatalf("parse unix last_backup_time: %v", err)
+	}
+	expected := time.Date(2024, 4, 17, 12, 0, 0, 0, time.UTC)
+	if !parsed.Equal(expected) {
+		t.Fatalf("expected %s, got %s", expected.Format(time.RFC3339), parsed.Format(time.RFC3339))
 	}
 }

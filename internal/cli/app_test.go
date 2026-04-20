@@ -334,6 +334,32 @@ func TestRunListWithoutServiceIDShowsMessageWhenEmpty(t *testing.T) {
 	assertNotContains(t, output, "| service ")
 }
 
+func TestRunListWithoutServiceIDFormatsUnixLastBackupTimestamp(t *testing.T) {
+	manager := &fakeManager{
+		listOutcome: orchestrator.ListOutcome{
+			Services: []config.ServiceEntry{
+				{
+					Name:           "svc",
+					Type:           "mysql",
+					Storage:        "default",
+					LastBackupTime: "1713355200",
+				},
+			},
+		},
+	}
+	app := NewApp("test")
+	app.manager = manager
+
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list"})
+	})
+	if err != nil {
+		t.Fatalf("run list with unix timestamp: %v", err)
+	}
+
+	assertContains(t, output, "2024-04-17T12:00:00Z")
+}
+
 func TestRunListWithServiceIDUsesSolidTable(t *testing.T) {
 	manager := &fakeManager{
 		listOutcome: orchestrator.ListOutcome{

@@ -52,6 +52,8 @@ sloth list [--remote] [<service-id>] [--show-object-key] [-d|--debug]
 
 Behavior:
 - Without `<service-id>`: lists configured services using columns `service`, `type`, `storage`, `last_backup`.
+- `last_backup_time` in service config accepts Unix timestamp seconds or RFC3339 ISO string; backup persistence stores Unix timestamp.
+- `last_backup` display in list output is normalized to RFC3339 when value is parseable.
 - Empty service storage values are rendered as `default`.
 - If no local services/backups are available, prints plain status text `No service backup found` (no warn prefix/color).
 - With `<service-id>`: lists backup objects/versions for that service using the same solid-border table style.

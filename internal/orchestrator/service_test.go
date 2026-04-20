@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,19 @@ func TestBackupNonNativeUsesIncrementedVersion(t *testing.T) {
 	}
 	if !strings.Contains(string(savedConfig), "last_backup_time") {
 		t.Fatalf("expected last_backup_time to be persisted")
+	}
+
+	loadedConfig, err := config.LoadServiceConfig()
+	if err != nil {
+		t.Fatalf("load saved service config: %v", err)
+	}
+	entry, _, found := loadedConfig.Config.Find("app")
+	if !found {
+		t.Fatalf("expected saved service entry")
+	}
+	expectedTimestamp := strconv.FormatInt(time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC).Unix(), 10)
+	if entry.LastBackupTime != expectedTimestamp {
+		t.Fatalf("expected unix last_backup_time %s, got %s", expectedTimestamp, entry.LastBackupTime)
 	}
 }
 
