@@ -192,6 +192,8 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 	if err != nil {
 		return err
 	}
+
+	fmt.Printf("\n%s", serviceID)
 	printBackupObjectsTable(listOutcome.Backups, false)
 	return nil
 }
@@ -247,7 +249,7 @@ func (a App) runList(ctx context.Context, args []string) error {
 		}
 
 		if len(outcome.RemoteBackupGroups) == 0 {
-			a.logger.Warnf("No backups found for service %s", serviceID)
+			fmt.Printf("No backups found for service %s\n", serviceID)
 			return nil
 		}
 		printRemoteBackupGroups(outcome.RemoteBackupGroups, showObjectKey)
@@ -273,10 +275,11 @@ func (a App) runList(ctx context.Context, args []string) error {
 	}
 
 	if len(outcome.Backups) == 0 {
-		a.logger.Warnf("No backups found for service %s", serviceID)
+		fmt.Printf("No backups found for service %s\n", serviceID)
 		return nil
 	}
 
+	fmt.Printf("%s", serviceID)
 	printBackupObjectsTable(outcome.Backups, showObjectKey)
 	return nil
 }
@@ -468,6 +471,10 @@ func ExitWithError(err error) {
 
 func printBackupObjectsTable(backups []orchestrator.BackupObject, showObjectKey bool) {
 	headers := []string{"version", "last_modified", "size"}
+	if len(backups) == 0 {
+		return
+	}
+
 	rows := make([][]string, 0, len(backups))
 	for _, backup := range backups {
 		row := []string{
@@ -487,8 +494,8 @@ func printBackupObjectsTable(backups []orchestrator.BackupObject, showObjectKey 
 }
 
 func printRemoteServiceGroups(groups []orchestrator.RemoteServiceGroup, showObjectKey bool) {
-	for _, group := range groups {
-		fmt.Printf("Storage: %s\n", group.Storage)
+	for idx, group := range groups {
+		fmt.Printf("\n#%d Storage: %s\n", idx, group.Storage)
 		if len(group.Rows) == 0 {
 			fmt.Println("No service backup found")
 			continue
@@ -514,7 +521,7 @@ func printRemoteServiceGroups(groups []orchestrator.RemoteServiceGroup, showObje
 
 func printRemoteBackupGroups(groups []orchestrator.RemoteBackupGroup, showObjectKey bool) {
 	for idx, group := range groups {
-		fmt.Printf("Storage #%d: %s\n", idx, group.Storage)
+		fmt.Printf("\n#%d Storage: %s\n", idx, group.Storage)
 		printBackupObjectsTable(group.Backups, showObjectKey)
 	}
 }
