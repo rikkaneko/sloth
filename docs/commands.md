@@ -14,14 +14,15 @@ Behavior:
 - Help output uses sectioned command descriptions and includes dynamic available values for `--type`, `--engine`, and `--storage`.
 - `--type` values come from embedded module YAML definitions plus `volume`.
 - `--storage` values are discovered from active config home `<config-home>/main.yaml`; if unavailable, help still prints with a graceful notice.
-- Global options (must appear before subcommand):
+- Global options (can be used before or after subcommand):
   - `-C, --config-home <dir>`: config home directory (default: `~/.config/sloth`)
   - `-S, --sudo`: prepend privileged program for container runtime commands
   - `--sudo-program <cmd>`: privileged program name (default: `sudo`)
+- Every help page (`root`, `backup`, `restore`, `list`) has a dedicated `GLOBAL OPTIONS` section.
 
 ## backup
 ```bash
-sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <container-name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-n|--volume-name <name>] [-N|--volume-names <n1,n2>] [--force] [--use-checksum] [--use-file-size-check] [-d|--debug]
+sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <container-name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-n|--volume-name <name>] [-N|--volume-names <n1,n2>] [-k|--keep] [--dry-run] [--force] [--use-checksum] [--use-file-size-check] [-d|--debug]
 ```
 
 Behavior:
@@ -31,6 +32,8 @@ Behavior:
 - Supported `--engine` values: `docker`, `podman`.
 - Local mode is explicit via `--local` (do not use `--engine local`).
 - With global `--sudo`, sloth prepends `<sudo-program>` to docker/podman commands used in backup execution paths.
+- `--keep` stores the generated backup artifact in current directory using module artifact filename.
+- `--dry-run` executes backup preparation and version resolution but skips final storage upload (`Put` call).
 - `--debug` shows external command output and S3 request/response summaries.
 - After backup upload completes, output prints the same backup table format as `sloth list <service-id>`.
 - Delta check mode:

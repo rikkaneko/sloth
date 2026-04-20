@@ -70,7 +70,9 @@ type BackupOptions struct {
 	ContainerName string
 	Engine        string
 	Local         bool
+	Keep          bool
 	Force         bool
+	DryRun        bool
 	UseChecksum   bool
 	UseFileSize   bool
 	Storage       string
@@ -246,6 +248,13 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		return BackupOutcome{}, fmt.Errorf("stat backup artifact: %w", err)
 	}
 	ui.Infof("Created backup file for %s (%s)", resolved.Service.Name, humanReadableSize(fileInfo.Size()))
+	if options.Keep {
+		keptPath, err := persistBackupArtifact(backupResult.LocalPath, backupResult.ArtifactName)
+		if err != nil {
+			return BackupOutcome{}, err
+		}
+		ui.Infof("Saved backup file to %q", keptPath)
+	}
 
 	storageConfigName := resolved.Service.Storage
 	if options.Storage != "" {
@@ -306,6 +315,17 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 				Skipped:     true,
 			}, nil
 		}
+	}
+	if options.DryRun {
+		ui.Infof("Dry run enabled. Skipped upload to %s (Version %s).", storageConfigName, version)
+		return BackupOutcome{
+			ServiceID:   resolved.Service.Name,
+			StorageName: storageConfigName,
+			Engine:      engine.Name(),
+			ObjectKey:   objectKey,
+			Version:     version,
+			Skipped:     true,
+		}, nil
 	}
 
 	ui.Infof("Uploading backup to %s (Version %s) ...", storageConfigName, version)
@@ -939,6 +959,28 @@ func checksumFileSHA256Base64(path string) (string, error) {
 		return "", fmt.Errorf("calculate file checksum: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func persistBackupArtifact(sourcePath string, artifactName string) (string, error) {
+	destinationPath := filepath.Join(".", artifactName)
+
+	sourceFile, err := os.Open(sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("open backup artifact for keep option: %w", err)
+	}
+	defer sourceFile.Close()
+
+	destinationFile, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("create kept backup artifact: %w", err)
+	}
+	defer destinationFile.Close()
+
+	if _, err := io.Copy(destinationFile, sourceFile); err != nil {
+		return "", fmt.Errorf("copy backup artifact to current directory: %w", err)
+	}
+
+	return destinationPath, nil
 }
 
 func selectNativeRestoreObject(versions []storage.ObjectInfo, requestedVersion string) (storage.ObjectInfo, bool) {

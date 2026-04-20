@@ -25,6 +25,7 @@ Sloth reads configuration from:
 - Environment file: `.env` by default, or `--env <path>`
 
 Default config home is `~/.config/sloth`. Override it globally with `--config-home <dir>` (or `-C <dir>`).
+Global options (`--config-home`, `--sudo`, `--sudo-program`) can be used before or after subcommands.
 
 Main config example:
 ```yaml
@@ -68,6 +69,7 @@ service:
 - Automatic environment variable loading with `${VAR}` interpolation
 - List remote service backups
 - Backup delta-check strategies: checksum (default) or file-size
+- Backup keep/dry-run options: `-k|--keep`, `--dry-run`
 
 ## Usage Examples
 ### Create a backup for a MySQL database deployed in a container
@@ -88,6 +90,18 @@ sloth backup app-db
 
 ```bash
 sloth backup app-db --use-file-size-check
+```
+
+### Backup and keep generated artifact in current directory
+
+```bash
+sloth backup app-db --keep
+```
+
+### Dry run backup upload (skip final put/upload call)
+
+```bash
+sloth backup app-db --dry-run
 ```
 
 ### Use a custom config home globally

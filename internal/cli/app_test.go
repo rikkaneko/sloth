@@ -138,7 +138,7 @@ func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	output, err := runWithCapturedStdout(t, func() error {
 		return app.Run(
 			context.Background(),
-			[]string{"backup", "svc", "-t", "mysql", "-c", "svc-db", "-E", "docker", "-s", "archive", "-e", ".env.local", "-m", "mod.yaml", "--force", "--use-file-size-check", "--use-checksum", "-d"},
+			[]string{"backup", "svc", "-t", "mysql", "-c", "svc-db", "-E", "docker", "-s", "archive", "-e", ".env.local", "-m", "mod.yaml", "-k", "--dry-run", "--force", "--use-file-size-check", "--use-checksum", "-d"},
 		)
 	})
 	if err != nil {
@@ -153,6 +153,9 @@ func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	}
 	if !manager.backupOptions.Force {
 		t.Fatalf("expected force flag to be passed: %+v", manager.backupOptions)
+	}
+	if !manager.backupOptions.Keep || !manager.backupOptions.DryRun {
+		t.Fatalf("expected keep and dry-run flags to be passed: %+v", manager.backupOptions)
 	}
 	if !strings.Contains(output, "| version ") {
 		t.Fatalf("expected backup table output\n%s", output)
@@ -219,6 +222,65 @@ func TestRunRestoreApplyForwardsGlobalSudoFlags(t *testing.T) {
 
 	if !manager.restoreOptions.UseSudo || manager.restoreOptions.SudoProgram != "sudo" {
 		t.Fatalf("expected restore apply sudo options: %+v", manager.restoreOptions)
+	}
+}
+
+func TestRunBackupAcceptsGlobalFlagsAfterSubcommand(t *testing.T) {
+	manager := &fakeManager{
+		backupOutcome: orchestrator.BackupOutcome{ServiceID: "svc"},
+		listOutcome: orchestrator.ListOutcome{
+			Backups: []orchestrator.BackupObject{
+				{
+					Key:          "backup/svc/1/svc.sql",
+					Version:      "1",
+					Size:         128,
+					LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+				},
+			},
+		},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(
+			context.Background(),
+			[]string{"backup", "svc", "-c", "svc-db", "--sudo-program=doas", "-S"},
+		)
+	})
+	if err != nil {
+		t.Fatalf("run backup with trailing global flags: %v", err)
+	}
+
+	if !manager.backupOptions.UseSudo || manager.backupOptions.SudoProgram != "doas" {
+		t.Fatalf("expected trailing global flags to be forwarded: %+v", manager.backupOptions)
+	}
+	if manager.backupOptions.ContainerName != "svc-db" {
+		t.Fatalf("expected container-name flag to be preserved: %+v", manager.backupOptions)
+	}
+}
+
+func TestRunRestoreApplyAcceptsGlobalFlagsAfterSubcommand(t *testing.T) {
+	manager := &fakeManager{
+		restoreOutcome: orchestrator.RestoreApplyOutcome{Engine: "podman"},
+	}
+
+	app := NewApp("test")
+	app.manager = manager
+
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(
+			context.Background(),
+			[]string{"restore", "svc", "--apply", "./svc.sql", "-S", "--sudo-program", "doas"},
+		)
+	})
+	if err != nil {
+		t.Fatalf("run restore apply with trailing global flags: %v", err)
+	}
+
+	if !manager.restoreOptions.UseSudo || manager.restoreOptions.SudoProgram != "doas" {
+		t.Fatalf("expected trailing global flags to be forwarded: %+v", manager.restoreOptions)
 	}
 }
 

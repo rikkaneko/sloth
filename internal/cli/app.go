@@ -117,7 +117,9 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 	var moduleConfig string
 	var volumeName string
 	var volumeNamesRaw string
+	var keep bool
 	var force bool
+	var dryRun bool
 	var useChecksum bool
 	var useFileSizeCheck bool
 	var debugMode bool
@@ -140,7 +142,10 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 	flagSet.StringVar(&volumeName, "n", "", "single volume name for type=volume")
 	flagSet.StringVar(&volumeNamesRaw, "volume-names", "", "comma separated volume names for type=volume")
 	flagSet.StringVar(&volumeNamesRaw, "N", "", "comma separated volume names for type=volume")
+	flagSet.BoolVar(&keep, "keep", false, "keep generated backup file in current directory")
+	flagSet.BoolVar(&keep, "k", false, "keep generated backup file in current directory")
 	flagSet.BoolVar(&force, "force", false, "force upload even when delta check matches")
+	flagSet.BoolVar(&dryRun, "dry-run", false, "dry run upload and skip final put call")
 	flagSet.BoolVar(&useChecksum, "use-checksum", false, "enable checksum delta check")
 	flagSet.BoolVar(&useFileSizeCheck, "use-file-size-check", false, "enable file-size delta check")
 	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
@@ -166,7 +171,9 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 		ContainerName: containerName,
 		Engine:        engine,
 		Local:         local,
+		Keep:          keep,
 		Force:         force,
+		DryRun:        dryRun,
 		UseChecksum:   useChecksum,
 		UseFileSize:   useFileSizeCheck,
 		Storage:       storageName,
@@ -378,14 +385,12 @@ func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 		SudoProgram: "sudo",
 	}
 
-	index := 0
-	for index < len(args) {
+	filteredArgs := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		if arg == "--" {
-			return global, args[index+1:], nil
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			break
+			filteredArgs = append(filteredArgs, args[index:]...)
+			return global, filteredArgs, nil
 		}
 
 		switch {
@@ -398,17 +403,15 @@ func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 				return global, nil, fmt.Errorf("%s requires a non-empty value", arg)
 			}
 			global.ConfigHome = value
-			index += 2
+			index++
 		case strings.HasPrefix(arg, "--config-home="):
 			value := strings.TrimSpace(strings.TrimPrefix(arg, "--config-home="))
 			if value == "" {
 				return global, nil, fmt.Errorf("--config-home requires a non-empty value")
 			}
 			global.ConfigHome = value
-			index++
 		case arg == "--sudo" || arg == "-S":
 			global.UseSudo = true
-			index++
 		case arg == "--sudo-program":
 			if index+1 >= len(args) {
 				return global, nil, fmt.Errorf("--sudo-program requires a value")
@@ -418,20 +421,19 @@ func parseGlobalOptions(args []string) (globalOptions, []string, error) {
 				return global, nil, fmt.Errorf("--sudo-program requires a non-empty value")
 			}
 			global.SudoProgram = value
-			index += 2
+			index++
 		case strings.HasPrefix(arg, "--sudo-program="):
 			value := strings.TrimSpace(strings.TrimPrefix(arg, "--sudo-program="))
 			if value == "" {
 				return global, nil, fmt.Errorf("--sudo-program requires a non-empty value")
 			}
 			global.SudoProgram = value
-			index++
 		default:
-			return global, args[index:], nil
+			filteredArgs = append(filteredArgs, arg)
 		}
 	}
 
-	return global, args[index:], nil
+	return global, filteredArgs, nil
 }
 
 func (a App) printBanner() {
@@ -511,8 +513,8 @@ func printRemoteServiceGroups(groups []orchestrator.RemoteServiceGroup, showObje
 }
 
 func printRemoteBackupGroups(groups []orchestrator.RemoteBackupGroup, showObjectKey bool) {
-	for _, group := range groups {
-		fmt.Printf("Storage: %s\n", group.Storage)
+	for idx, group := range groups {
+		fmt.Printf("Storage #%d: %s\n", idx, group.Storage)
 		printBackupObjectsTable(group.Backups, showObjectKey)
 	}
 }

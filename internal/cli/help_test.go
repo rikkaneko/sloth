@@ -47,6 +47,7 @@ func TestRunRootHelpWithDynamicValues(t *testing.T) {
 	}
 
 	assertContains(t, output, "SYNOPSIS")
+	assertContains(t, output, "GLOBAL OPTIONS")
 	assertContains(t, output, "Default compiled-in and discovered parameters:")
 	assertContains(t, output, "Available service types:")
 	assertContains(t, output, "volume")
@@ -65,8 +66,11 @@ func TestRunBackupHelpWithoutServiceID(t *testing.T) {
 	}
 
 	assertContains(t, output, "sloth backup <service-id> [options]")
+	assertContains(t, output, "GLOBAL OPTIONS")
 	assertContains(t, output, "-t, --type <service-type>")
 	assertContains(t, output, "-l, --local")
+	assertContains(t, output, "-k, --keep")
+	assertContains(t, output, "--dry-run")
 	assertContains(t, output, "--force")
 	assertContains(t, output, "--use-checksum")
 	assertContains(t, output, "--use-file-size-check")
@@ -84,6 +88,7 @@ func TestRunHelpSubcommandForRestore(t *testing.T) {
 	}
 
 	assertContains(t, output, "sloth restore <service-id>")
+	assertContains(t, output, "GLOBAL OPTIONS")
 	assertContains(t, output, "-E, --engine <container-engine>")
 }
 
@@ -142,7 +147,37 @@ func TestRunListHelpIncludesShowObjectKey(t *testing.T) {
 
 	assertContains(t, output, "--show-object-key")
 	assertContains(t, output, "--remote")
+	assertContains(t, output, "GLOBAL OPTIONS")
 	assertContains(t, output, "sloth list [--remote] [<service-id>]")
+}
+
+func TestRunListHelpAcceptsConfigHomeAfterSubcommand(t *testing.T) {
+	homeDir := t.TempDir()
+	overrideConfigHome := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	mainConfigPath := filepath.Join(overrideConfigHome, "main.yaml")
+	mainConfig := "storage:\n" +
+		"  - name: after-subcommand\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    region: auto\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n"
+	if err := os.WriteFile(mainConfigPath, []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write override main config: %v", err)
+	}
+
+	app := NewApp("test")
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"list", "-C", overrideConfigHome, "--help"})
+	})
+	if err != nil {
+		t.Fatalf("run list help with config-home after subcommand: %v", err)
+	}
+
+	assertContains(t, output, "after-subcommand")
 }
 
 func TestRunHelpUnknownTopic(t *testing.T) {

@@ -342,6 +342,144 @@ func TestBackupSkipsUploadWhenChecksumMatches(t *testing.T) {
 	}
 }
 
+func TestBackupKeepStoresArtifactInCurrentDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	if err := os.MkdirAll(filepath.Join(homeDir, ".config", "sloth"), 0o755); err != nil {
+		t.Fatalf("mkdir home config dir: %v", err)
+	}
+	mainConfig := "storage:\n  - name: default\n    type: s3\n    endpoint: https://example.com\n    region: us-east-1\n    bucket: backups\n    access_key_id: key\n    secret_access_key: secret\n    use_native_object_versioning: false\n    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(homeDir, ".config", "sloth", "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	artifactContent := []byte("keep-this-local-file")
+	artifact := filepath.Join(workingDir, "generated.sql")
+	if err := os.WriteFile(artifact, artifactContent, 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{},
+	}
+
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 20, 6, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	_, err = manager.Backup(context.Background(), BackupOptions{
+		ServiceID:     "app",
+		Type:          "mysql",
+		ContainerName: "app-db",
+		Local:         true,
+		Keep:          true,
+	})
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	keptPath := filepath.Join(workingDir, "app-mysql-backup.sql")
+	keptContent, err := os.ReadFile(keptPath)
+	if err != nil {
+		t.Fatalf("read kept backup file: %v", err)
+	}
+	if string(keptContent) != string(artifactContent) {
+		t.Fatalf("expected kept artifact content to match source")
+	}
+	if provider.putCalls == 0 {
+		t.Fatalf("expected upload call for non-dry-run backup")
+	}
+}
+
+func TestBackupDryRunSkipsFinalUploadCall(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	if err := os.MkdirAll(filepath.Join(homeDir, ".config", "sloth"), 0o755); err != nil {
+		t.Fatalf("mkdir home config dir: %v", err)
+	}
+	mainConfig := "storage:\n  - name: default\n    type: s3\n    endpoint: https://example.com\n    region: us-east-1\n    bucket: backups\n    access_key_id: key\n    secret_access_key: secret\n    use_native_object_versioning: false\n    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(homeDir, ".config", "sloth", "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	artifact := filepath.Join(workingDir, "generated.sql")
+	if err := os.WriteFile(artifact, []byte("dry-run-data"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{},
+	}
+
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 20, 6, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.Backup(context.Background(), BackupOptions{
+		ServiceID:     "app",
+		Type:          "mysql",
+		ContainerName: "app-db",
+		Local:         true,
+		DryRun:        true,
+	})
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	if !outcome.Skipped {
+		t.Fatalf("expected dry-run backup outcome to be marked as skipped")
+	}
+	if provider.putCalls != 0 {
+		t.Fatalf("expected no upload call in dry-run backup")
+	}
+	if outcome.ObjectKey != "backup/app/1/app-mysql-backup.sql" {
+		t.Fatalf("unexpected dry-run object key %q", outcome.ObjectKey)
+	}
+	if outcome.Version != "1" {
+		t.Fatalf("unexpected dry-run version %q", outcome.Version)
+	}
+
+	savedConfig, err := os.ReadFile(filepath.Join(homeDir, ".config", "sloth", "service.yaml"))
+	if err != nil {
+		t.Fatalf("read saved service config: %v", err)
+	}
+	if strings.Contains(string(savedConfig), "last_backup_time") {
+		t.Fatalf("expected dry-run to avoid persisting last_backup_time")
+	}
+}
+
 func TestBackupSkipsUploadWhenFileSizeCheckEnabled(t *testing.T) {
 	homeDir := t.TempDir()
 	workingDir := t.TempDir()
