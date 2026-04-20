@@ -37,6 +37,7 @@ storage:
     secret_access_key: your-secret
     use_native_object_versioning: false
     base_path: /backup
+
 common:
   file_delta_check: checksum # checksum | file_size
 ```
@@ -54,85 +55,85 @@ service:
 
 ## Features
 - Backup and restore modules for:
-  - `mariadb`, `mysql`, `pgsql`
+  - Relational databases (MariaDB, MySQL and PostgreSQL)
   - Directus schema snapshot
   - RabbitMQ definitions
-  - Redis snapshot backup and guided restore apply
-  - Docker/Podman volume archive backup/restore
+  - Redis snapshot backup and guided restore
+  - Docker/Podman volume archive
 - Local mode support for: `mariadb`, `mysql`, `pgsql`, `directus`, `rabbitmq`, `redis`
 - S3-compatible storage backend (AWS S3, MinIO, Garage, Backblaze B2, etc.)
 - Native object versioning mode and sloth-managed incremental versioning mode
-- Engine auto-detection (`podman` then `docker`) by `container_name`, or by `<service-id>` when container name is omitted
-- Automatic env loading with `${VAR}` interpolation
-- Sectioned `--help` output for root and subcommands with dynamic available values for `--type`, `--engine`, and `--storage`
-- Short and long flag pairs for backup/restore/list (`-t/-c/-E/-l/-s/-e/-m/-n/-N/-v/-a/-d`)
-- Unified info/debug logging (`--debug`) including external command output and S3 API call summaries
-- Remote list mode with grouped per-storage tables (`sloth list --remote`)
-- Backup delta-check strategies: checksum (default) or file-size (`common.file_delta_check` and backup flags)
-- Checksum delta-check reads S3 object metadata via `HeadObject` (`ChecksumMode=ENABLED`); if checksum metadata is unavailable, sloth logs a warning and falls back to file-size compare
-- `backup --force` to always upload a new backup version regardless of delta-check match
-- Built-in module templates embedded from per-service YAML files under `internal/modules/yaml/*.yaml`
-- Colorized command output and solid-border table-formatted backup/service listings
+- Container engine auto-detection on `container_name` or `<service-id>`.
+- Automatic environment variable loading with `${VAR}` interpolation
+- List remote service backups
+- Backup delta-check strategies: checksum (default) or file-size
 
 ## Usage Examples
-Backup a service:
+### Create a backup for a MySQL database deployed in a container
+
+```bash
+sloth backup app-db -t mysql
+```
+
+This command will also create a service config (`.sloth.yaml`) in the current working directory.
+
+### Create a backup on existing service config:
+
 ```bash
 sloth backup app-db
 ```
 
-Backup with explicit file-size delta check:
+### Backup with explicit file-size delta check:
+
 ```bash
 sloth backup app-db --use-file-size-check
 ```
 
-Force upload regardless of delta checks:
-```bash
-sloth backup app-db --force
-```
+### Create a backup for a MySQL database running in the host
 
-Create a new local service entry and backup immediately:
-```bash
-sloth backup app-db --type mysql --container-name app-db-container --engine docker
-```
-
-Backup in local mode:
 ```bash
 sloth backup app-db --type mysql --local
 ```
 
-List configured services:
+### List available service config in local
+
 ```bash
 sloth list
 ```
-If no local services/backups are available, sloth prints plain status text `No service backup found`.
 
-List backups for a service:
+### List available backup version for a service
+
 ```bash
 sloth list app-db
 ```
 
-List remote services grouped by storage:
+### List available service config in remote storage
+
 ```bash
 sloth list --remote
 ```
 
-List remote backups for a service grouped by storage:
+### List available backup version for a service (remote only)
+
 ```bash
 sloth list --remote app-db
 ```
 
-List backups with object key column:
+### Restore a backup (Stage 1)
+
+Retrieve the latest version of the backup from remote storage
+
 ```bash
-sloth list app-db --show-object-key
+sloth restore app-db
 ```
 
-Restore stage 1 (retrieve backup):
-```bash
-sloth restore app-db --version latest
-```
-`restore` retrieve stage does not require a service config entry; it can resolve storage via `--storage` or fallback to `default`.
+### Restore a backup (Stage 2)
 
-Restore stage 2 (apply local backup file):
+> [!WARNING]
+> Before restoring a backup, you need to stop and remove the targeted containers. Then, recreate the container with its dependencies.
+
+Apply the backup to the target service
+
 ```bash
 sloth restore app-db --apply ./app-db-backup-20260417-120000-3.sql
 ```
