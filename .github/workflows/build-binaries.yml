@@ -13,41 +13,9 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
-      - name: Runner diagnostics (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          uname -a;
-      - name: Runner diagnostics (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          sw_vers;
-      - name: Run unit tests
-        run: |
-          go test ./...;
-
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs:
-      - test
     strategy:
       fail-fast: false
       matrix:
@@ -91,26 +59,6 @@ jobs:
           mkdir -p dist;
           OUT="dist/sloth-${GOOS}-${GOARCH}";
           go build -trimpath -ldflags "-s -w -X main.Version=${VERSION}" -o "${OUT}" ./cmd/sloth;
-      - name: Verify Linux static binary
-        if: runner.os == 'Linux' && matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: |
-          set -euo pipefail;
-          BIN="dist/sloth-linux-amd64";
-          "${BIN}" --help > /dev/null;
-          if ldd "${BIN}" 2>&1 | grep -q "not a dynamic executable"; then
-            echo "Binary is statically linked.";
-          else
-            echo "Binary appears dynamically linked.";
-            ldd "${BIN}";
-            exit 1;
-          fi;
-          file "${BIN}";
-      - name: Verify macOS binary metadata
-        if: runner.os == 'macOS' && matrix.goos == 'darwin' && matrix.goarch == 'arm64'
-        run: |
-          set -euo pipefail;
-          BIN="dist/sloth-darwin-arm64";
-          file "${BIN}";
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:

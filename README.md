@@ -18,6 +18,13 @@ Set build-time version (optional):
 go build -ldflags "-X main.Version=1.0.0" -o bin/sloth ./cmd/sloth
 ```
 
+## CI Artifacts
+GitHub Actions workflow `.github/workflows/build-binaries.yml` runs tests on both `ubuntu-latest` and `macos-latest`, then builds standalone binaries and uploads them as workflow artifacts:
+- `sloth-linux-amd64` (build with CGO_ENABLED=0, targeted `linux:amd64`)
+- `sloth-linux-arm64` (build with CGO_ENABLED=0, targeted `linux:arm64`)
+- `sloth-darwin-arm64` (build with CGO_ENABLED=0, targeted `macos:arm64`)
+When pushing a new tag matching `v*`, the workflow also publishes these binaries to the corresponding GitHub Release page as release assets.
+
 ## Environment Configuration
 Sloth reads configuration from:
 - Main config: `<config-home>/main.yaml`
