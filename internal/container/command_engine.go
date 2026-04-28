@@ -65,7 +65,7 @@ func (e CommandEngine) Exec(ctx context.Context, containerName string, command s
 	for key, value := range env {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", key, value))
 	}
-	args = append(args, containerName, "sh", "-lc", command)
+	args = append(args, containerName, "sh", "-c", command)
 
 	invocationBinary, invocationArgs := e.buildInvocation(args)
 	cmd := exec.CommandContext(ctx, invocationBinary, invocationArgs...)
@@ -122,7 +122,7 @@ func (e CommandEngine) CopyTo(ctx context.Context, containerName string, sourceP
 }
 
 func (e CommandEngine) RunHostShell(ctx context.Context, command string, env map[string]string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
-	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Stdin = stdin
 	var stdoutBuffer bytes.Buffer
 	var stderrBuffer bytes.Buffer
@@ -134,7 +134,7 @@ func (e CommandEngine) RunHostShell(ctx context.Context, command string, env map
 		mergedEnv = append(mergedEnv, fmt.Sprintf("%s=%s", key, value))
 	}
 	cmd.Env = mergedEnv
-	ui.Debugf("run_cmd sh -lc %q", command)
+	ui.Debugf("run_cmd sh -c %q", command)
 
 	if err := cmd.Run(); err != nil {
 		logCommandOutput(stdoutBuffer.String(), stderrBuffer.String())

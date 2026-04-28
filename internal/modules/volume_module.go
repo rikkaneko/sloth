@@ -47,7 +47,7 @@ func (m VolumeModule) Backup(ctx context.Context, req BackupRequest) (BackupResu
 	}
 
 	archiveCommand := fmt.Sprintf(
-		"%s run --rm %s alpine:3.20 sh -lc 'tar -czf - -C /volumes .' > %s",
+		"%s run --rm %s alpine:3.20 sh -c 'tar -czf - -C /volumes .' > %s",
 		req.Engine.RuntimeCommand(),
 		strings.Join(mountFlags, " "),
 		shellQuote(outputPath),
@@ -80,7 +80,7 @@ func (m VolumeModule) Restore(ctx context.Context, req RestoreRequest) (RestoreR
 	}
 
 	restoreCommand := fmt.Sprintf(
-		"cat %s | %s run --rm -i %s alpine:3.20 sh -lc 'tar -xzf - -C /restore'",
+		"cat %s | %s run --rm -i %s alpine:3.20 sh -c 'tar -xzf - -C /restore'",
 		shellQuote(req.BackupFile),
 		req.Engine.RuntimeCommand(),
 		strings.Join(mountFlags, " "),

@@ -27,7 +27,7 @@ func (LocalEngine) ContainerExists(ctx context.Context, containerName string) (b
 }
 
 func (LocalEngine) Exec(ctx context.Context, containerName string, command string, env map[string]string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
-	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Stdin = stdin
 	var stdoutBuffer bytes.Buffer
 	var stderrBuffer bytes.Buffer
@@ -39,7 +39,7 @@ func (LocalEngine) Exec(ctx context.Context, containerName string, command strin
 		mergedEnv = append(mergedEnv, fmt.Sprintf("%s=%s", key, value))
 	}
 	cmd.Env = mergedEnv
-	ui.Debugf("run_cmd sh -lc %q", command)
+	ui.Debugf("run_cmd sh -c %q", command)
 
 	if err := cmd.Run(); err != nil {
 		logCommandOutput(stdoutBuffer.String(), stderrBuffer.String())
