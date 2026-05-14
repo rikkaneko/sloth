@@ -8,4 +8,4 @@ restore:
   backup_file:
     to_container: /tmp/sloth-directus-snapshot.yaml
   command:
-    - npx directus schema apply "{{backup_file}}"
+    - npx directus schema apply "{{backup_file}}" -y
