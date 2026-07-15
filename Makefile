@@ -3,7 +3,10 @@ BINARY := sloth
 .PHONY: build test lint tidy
 
 build:
-	go build -o bin/$(BINARY) ./cmd/sloth
+	go build -trimpath -ldflags "-s -w -X main.Version=$${VERSION:-$$(git describe --tags --always)}" -o bin/$(BINARY) ./cmd/sloth
+
+build-dev:
+	go build -trimpath -ldflags "-X main.Version=$${VERSION:-$$(git describe --tags --always)}" -o bin/$(BINARY) ./cmd/sloth
 
 test:
 	go test ./...

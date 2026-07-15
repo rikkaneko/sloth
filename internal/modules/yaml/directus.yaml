@@ -2,7 +2,7 @@ artifact_ext: yaml
 supports_local: true
 backup:
   command:
-    - npx directus schema snapshot "{{target_file}}"
+    - npx directus schema snapshot "{{target_file}}" -y
   target_file: /tmp/sloth-directus-snapshot.yaml
 restore:
   backup_file:
