@@ -57,12 +57,12 @@ jobs:
         run: |
           set -euo pipefail;
           mkdir -p dist;
-          OUT="dist/sloth-${GOOS}-${GOARCH}";
+          export OUT="dist/sloth-${GOOS}-${GOARCH}";
           make build;
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sloth-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/sloth-${{ matrix.goos }}-${{ matrix.goarch }}
           if-no-files-found: error
 
@@ -81,8 +81,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/sloth-linux-amd64/sloth-linux-amd64
-            release-assets/sloth-linux-arm64/sloth-linux-arm64
-            release-assets/sloth-darwin-arm64/sloth-darwin-arm64
+            release-assets/linux-amd64/sloth-linux-amd64
+            release-assets/linux-arm64/sloth-linux-arm64
+            release-assets/darwin-arm64/sloth-darwin-arm64
           fail_on_unmatched_files: true
           generate_release_notes: true
