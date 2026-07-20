@@ -75,7 +75,7 @@ jobs:
         with:
           path: release-assets
       - name: Upload assets to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release-assets/linux-amd64/sloth-linux-amd64
