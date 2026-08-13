@@ -51,6 +51,21 @@ func (f *fakeHeadObjectClient) HeadObject(
 	return f.output, f.err
 }
 
+type fakeDeleteObjectClient struct {
+	lastInput *awss3.DeleteObjectInput
+	output    *awss3.DeleteObjectOutput
+	err       error
+}
+
+func (f *fakeDeleteObjectClient) DeleteObject(
+	ctx context.Context,
+	params *awss3.DeleteObjectInput,
+	optFns ...func(*awss3.Options),
+) (*awss3.DeleteObjectOutput, error) {
+	f.lastInput = params
+	return f.output, f.err
+}
+
 func TestHeadObjectReturnsMetadataWithChecksum(t *testing.T) {
 	client := &fakeHeadObjectClient{
 		output: &awss3.HeadObjectOutput{
@@ -115,6 +130,54 @@ func TestHeadObjectWithoutVersionID(t *testing.T) {
 	}
 	if metadata.Size != 64 {
 		t.Fatalf("expected size 64, got %d", metadata.Size)
+	}
+}
+
+func TestDeleteObjectPassesKeyAndVersionID(t *testing.T) {
+	client := &fakeDeleteObjectClient{
+		output: &awss3.DeleteObjectOutput{},
+	}
+	provider := &Provider{
+		deleteClient: client,
+		bucket:       "backup-bucket",
+	}
+
+	if err := provider.Delete(context.Background(), "path/to/object.sql", "ver-1"); err != nil {
+		t.Fatalf("delete object: %v", err)
+	}
+
+	if client.lastInput == nil {
+		t.Fatalf("expected delete object input to be recorded")
+	}
+	if value := valueString(client.lastInput.Bucket); value != "backup-bucket" {
+		t.Fatalf("unexpected bucket: %q", value)
+	}
+	if value := valueString(client.lastInput.Key); value != "path/to/object.sql" {
+		t.Fatalf("unexpected key: %q", value)
+	}
+	if value := valueString(client.lastInput.VersionId); value != "ver-1" {
+		t.Fatalf("unexpected version id: %q", value)
+	}
+}
+
+func TestDeleteObjectWithoutVersionID(t *testing.T) {
+	client := &fakeDeleteObjectClient{
+		output: &awss3.DeleteObjectOutput{},
+	}
+	provider := &Provider{
+		deleteClient: client,
+		bucket:       "backup-bucket",
+	}
+
+	if err := provider.Delete(context.Background(), "path/to/object.sql", ""); err != nil {
+		t.Fatalf("delete object: %v", err)
+	}
+
+	if client.lastInput == nil {
+		t.Fatalf("expected delete object input to be recorded")
+	}
+	if client.lastInput.VersionId != nil {
+		t.Fatalf("expected nil version id when omitted")
 	}
 }
 

@@ -22,7 +22,7 @@ Behavior:
 
 ## backup
 ```bash
-sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <container-name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-n|--volume-name <name>] [-N|--volume-names <n1,n2>] [-k|--keep] [--dry-run] [--force] [--use-checksum] [--use-file-size-check] [-d|--debug]
+sloth backup <service-id> [-t|--type <service-type>] [-c|--container-name <container-name>] [-E|--engine <docker|podman>] [-l|--local] [-s|--storage <storage-name>] [-e|--env <env-file>] [-m|--module-config <yaml>] [-n|--volume-name <name>] [-N|--volume-names <n1,n2>] [-k|--keep] [--dry-run] [--force] [--override-latest-version] [--use-checksum] [--use-file-size-check] [-d|--debug]
 ```
 
 Behavior:
@@ -34,6 +34,10 @@ Behavior:
 - With global `--sudo`, sloth prepends `<sudo-program>` to docker/podman commands used in backup execution paths.
 - `--keep` stores the generated backup artifact in current directory using module artifact filename.
 - `--dry-run` executes backup preparation and version resolution but skips final storage upload (`Put` call).
+- `--override-latest-version` replaces the latest logical version instead of creating a new version.
+  - Non-native versioning reuses the latest numeric version object key.
+  - Native object versioning uploads to the same object key and deletes the previous latest native version ID.
+- Configured retention runs only after a successful upload. Retention resolves from `service[].keep_version_n`, then `storage[].keep_version_n`, then `common.keep_version_n`; unset means unlimited.
 - `--debug` shows external command output and S3 request/response summaries.
 - After backup upload completes, output prints the same backup table format as `sloth list <service-id>`.
 - Delta check mode:
@@ -65,6 +69,26 @@ Behavior:
   - `sloth list --remote <service-id>`: columns `version`, `last_modified`, `size` (plus `object_key` when `--show-object-key`).
   - `sloth list --remote` shows every available storage section; empty storages print plain status text `No service backup found`.
   - `sloth list --remote <service-id>` omits storages with no matching backup rows.
+- `--debug` shows storage API call details.
+
+## version
+```bash
+sloth version <service-id> [-s|--storage <storage-name>] [--delete <version>] [--keep-last N] [--delete-before <datetime>] [--keep-after <datetime>] [--dry-run] [-d|--debug]
+```
+
+Behavior:
+- Without delete flags, lists available versions for `<service-id>` across all configured storages, grouped by storage.
+- `--storage <storage-name>` limits listing or deletion to one storage.
+- `--delete <version>` deletes the displayed version:
+  - Native object versioning deletes the exact S3 native version ID shown in the `version` column.
+  - Non-native versioning deletes all objects under the numeric version directory.
+- `--keep-last N` keeps the newest N versions by `last_modified` and deletes older versions.
+- `--delete-before <datetime>` deletes versions with `last_modified` strictly before the datetime.
+- `--keep-after <datetime>` keeps versions at or after the datetime and deletes older versions.
+- Datetime values accept RFC3339 (for example `2026-04-18T11:00:00Z`) or Unix seconds.
+- `--dry-run` prints the versions that would be deleted without issuing storage delete calls.
+- `--delete`, `--keep-last`, `--delete-before`, and `--keep-after` are mutually exclusive.
+- After deletion, sloth prints deleted objects and the remaining grouped version list.
 - `--debug` shows storage API call details.
 
 ## restore stage 1 (retrieve)

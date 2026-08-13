@@ -60,6 +60,9 @@ type fakeStorageProvider struct {
 	getDestPath         string
 	getCalls            int
 	getBody             []byte
+	deleteCalls         int
+	deletedKeys         []string
+	deletedVersionIDs   []string
 }
 
 func (f *fakeStorageProvider) Put(ctx context.Context, key string, localPath string) error {
@@ -96,6 +99,33 @@ func (f *fakeStorageProvider) HeadObject(ctx context.Context, key string, versio
 	f.headKey = key
 	f.headVersionID = versionID
 	return f.headMetadata, nil
+}
+
+func (f *fakeStorageProvider) Delete(ctx context.Context, key string, versionID string) error {
+	f.deleteCalls++
+	f.deletedKeys = append(f.deletedKeys, key)
+	f.deletedVersionIDs = append(f.deletedVersionIDs, versionID)
+	if versionID != "" {
+		remaining := make([]storage.ObjectInfo, 0, len(f.listedVersions))
+		for _, object := range f.listedVersions {
+			if object.Key == key && object.VersionID == versionID {
+				continue
+			}
+			remaining = append(remaining, object)
+		}
+		f.listedVersions = remaining
+		return nil
+	}
+
+	remaining := make([]storage.ObjectInfo, 0, len(f.listedObjects))
+	for _, object := range f.listedObjects {
+		if object.Key == key {
+			continue
+		}
+		remaining = append(remaining, object)
+	}
+	f.listedObjects = remaining
+	return nil
 }
 
 type testStorageFactory struct {
@@ -1251,6 +1281,700 @@ func TestRestoreRetrieveWithoutServiceConfigNativeLatestResolvesNumericVersion(t
 	}
 	if !strings.HasSuffix(outcome.DownloadedPath, "-2.tar") {
 		t.Fatalf("expected numeric version suffix in filename, got %q", outcome.DownloadedPath)
+	}
+}
+
+func TestResolveKeepVersionNPrecedence(t *testing.T) {
+	mainConfig := config.MainConfig{Common: config.CommonConfig{KeepVersionN: 1}}
+	storageConfig := config.StorageConfig{KeepVersionN: 2}
+	service := config.ServiceEntry{KeepVersionN: 3}
+
+	if got := resolveKeepVersionN(service, storageConfig, mainConfig); got != 3 {
+		t.Fatalf("expected service keep_version_n precedence, got %d", got)
+	}
+	service.KeepVersionN = 0
+	if got := resolveKeepVersionN(service, storageConfig, mainConfig); got != 2 {
+		t.Fatalf("expected storage keep_version_n precedence, got %d", got)
+	}
+	storageConfig.KeepVersionN = 0
+	if got := resolveKeepVersionN(service, storageConfig, mainConfig); got != 1 {
+		t.Fatalf("expected common keep_version_n fallback, got %d", got)
+	}
+	mainConfig.Common.KeepVersionN = 0
+	if got := resolveKeepVersionN(service, storageConfig, mainConfig); got != 0 {
+		t.Fatalf("expected unlimited keep_version_n fallback, got %d", got)
+	}
+}
+
+func TestVersionDeleteNonNativeDeletesMatchingVersionAcrossStorages(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: archive\n" +
+		"    type: s3\n" +
+		"    endpoint: https://archive.example.com\n" +
+		"    bucket: archive\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	archiveProvider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/archive.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/archive.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+		},
+	}
+	defaultProvider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/2/default.sql", LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{
+		storageFactory: namedTestStorageFactory{
+			providers: map[string]storage.Provider{
+				"archive": archiveProvider,
+				"default": defaultProvider,
+			},
+		},
+	}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{ServiceID: "app", Delete: "2"})
+	if err != nil {
+		t.Fatalf("delete version: %v", err)
+	}
+
+	if archiveProvider.deleteCalls != 1 || archiveProvider.deletedKeys[0] != "backup/app/2/archive.sql" {
+		t.Fatalf("expected archive version 2 delete, got %+v", archiveProvider.deletedKeys)
+	}
+	if defaultProvider.deleteCalls != 1 || defaultProvider.deletedKeys[0] != "backup/app/2/default.sql" {
+		t.Fatalf("expected default version 2 delete, got %+v", defaultProvider.deletedKeys)
+	}
+	if len(outcome.Deleted) != 2 {
+		t.Fatalf("expected two deleted rows, got %+v", outcome.Deleted)
+	}
+}
+
+func TestVersionDeleteDryRunDoesNotDeleteNonNativeVersion(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/app.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/app.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{ServiceID: "app", Delete: "2", DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run delete version: %v", err)
+	}
+
+	if provider.deleteCalls != 0 {
+		t.Fatalf("expected no delete calls in dry-run, got %d", provider.deleteCalls)
+	}
+	if !outcome.DryRun || len(outcome.Deleted) != 1 || outcome.Deleted[0].ObjectKey != "backup/app/2/app.sql" {
+		t.Fatalf("expected dry-run deleted candidate, got %+v", outcome)
+	}
+	if len(outcome.Groups) != 1 || len(outcome.Groups[0].Backups) != 2 {
+		t.Fatalf("expected dry-run remaining list to remain unchanged, got %+v", outcome.Groups)
+	}
+}
+
+func TestVersionDeleteNativeDeletesExactVersionID(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: true\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedVersions: []storage.ObjectInfo{
+			{Key: "backup/app/app.sql", VersionID: "ver-1", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/app.sql", VersionID: "ver-2", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{ServiceID: "app", Delete: "ver-1", Storage: "default"})
+	if err != nil {
+		t.Fatalf("delete native version: %v", err)
+	}
+
+	if provider.deleteCalls != 1 || provider.deletedKeys[0] != "backup/app/app.sql" || provider.deletedVersionIDs[0] != "ver-1" {
+		t.Fatalf("expected exact native delete, keys=%+v versions=%+v", provider.deletedKeys, provider.deletedVersionIDs)
+	}
+	if len(outcome.Deleted) != 1 || outcome.Deleted[0].VersionID != "ver-1" {
+		t.Fatalf("unexpected deleted outcome: %+v", outcome.Deleted)
+	}
+}
+
+func TestVersionKeepLastPrunesOldestNonNativeVersions(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/app.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/app.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/3/app.sql", LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{ServiceID: "app", KeepLast: 2})
+	if err != nil {
+		t.Fatalf("keep last: %v", err)
+	}
+
+	if provider.deleteCalls != 1 || provider.deletedKeys[0] != "backup/app/1/app.sql" {
+		t.Fatalf("expected oldest version delete, got %+v", provider.deletedKeys)
+	}
+	if len(outcome.Groups) != 1 || len(outcome.Groups[0].Backups) != 2 {
+		t.Fatalf("expected remaining two backups, got %+v", outcome.Groups)
+	}
+}
+
+func TestVersionKeepLastDryRunDoesNotPruneNonNativeVersions(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/app.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/app.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/3/app.sql", LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{ServiceID: "app", KeepLast: 2, DryRun: true})
+	if err != nil {
+		t.Fatalf("dry-run keep last: %v", err)
+	}
+
+	if provider.deleteCalls != 0 {
+		t.Fatalf("expected no prune delete calls in dry-run, got %d", provider.deleteCalls)
+	}
+	if !outcome.DryRun || len(outcome.Deleted) != 1 || outcome.Deleted[0].Version != "1" {
+		t.Fatalf("expected dry-run prune candidate for version 1, got %+v", outcome)
+	}
+	if len(outcome.Groups) != 1 || len(outcome.Groups[0].Backups) != 3 {
+		t.Fatalf("expected dry-run grouped list to remain unchanged, got %+v", outcome.Groups)
+	}
+}
+
+func TestVersionDeleteBeforePrunesNonNativeVersionsBeforeCutoff(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/app.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/app.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/3/app.sql", LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{
+		ServiceID:    "app",
+		DeleteBefore: "2026-04-18T11:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("delete before: %v", err)
+	}
+
+	if provider.deleteCalls != 1 || provider.deletedKeys[0] != "backup/app/1/app.sql" {
+		t.Fatalf("expected version before cutoff delete, got %+v", provider.deletedKeys)
+	}
+	if len(outcome.Deleted) != 1 || outcome.Deleted[0].Version != "1" {
+		t.Fatalf("unexpected deleted outcome: %+v", outcome.Deleted)
+	}
+}
+
+func TestVersionKeepAfterPrunesNativeVersionsBeforeCutoff(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: true\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedVersions: []storage.ObjectInfo{
+			{Key: "backup/app/app.sql", VersionID: "ver-1", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/app.sql", VersionID: "ver-2", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/app.sql", VersionID: "ver-3", LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{
+		ServiceID: "app",
+		KeepAfter: "2026-04-18T11:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("keep after native: %v", err)
+	}
+
+	if provider.deleteCalls != 1 || provider.deletedVersionIDs[0] != "ver-1" {
+		t.Fatalf("expected only native version before cutoff delete, versions=%+v", provider.deletedVersionIDs)
+	}
+	if len(outcome.Deleted) != 1 || outcome.Deleted[0].VersionID != "ver-1" {
+		t.Fatalf("unexpected native deleted outcome: %+v", outcome.Deleted)
+	}
+}
+
+func TestVersionDeleteBeforeDryRunKeepsStoredVersions(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/app.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/app.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	outcome, err := manager.Version(context.Background(), VersionOptions{
+		ServiceID:    "app",
+		DeleteBefore: "2026-04-18T11:00:00Z",
+		DryRun:       true,
+	})
+	if err != nil {
+		t.Fatalf("dry-run delete before: %v", err)
+	}
+
+	if provider.deleteCalls != 0 {
+		t.Fatalf("expected no delete calls in dry-run, got %d", provider.deleteCalls)
+	}
+	if !outcome.DryRun || len(outcome.Deleted) != 1 || outcome.Deleted[0].Version != "1" {
+		t.Fatalf("expected dry-run deleted candidate for version 1, got %+v", outcome)
+	}
+	if len(outcome.Groups) != 1 || len(outcome.Groups[0].Backups) != 2 {
+		t.Fatalf("expected dry-run grouped list to remain unchanged, got %+v", outcome.Groups)
+	}
+}
+
+func TestVersionDeleteBeforeRejectsInvalidDatetime(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	manager := Manager{storageFactory: testStorageFactory{provider: &fakeStorageProvider{}}}
+	_, err := manager.Version(context.Background(), VersionOptions{ServiceID: "app", DeleteBefore: "not-a-time"})
+	if err == nil || !strings.Contains(err.Error(), "--delete-before invalid datetime") {
+		t.Fatalf("expected invalid datetime error, got %v", err)
+	}
+}
+
+func TestVersionKeepLastPrunesOldestNativeVersions(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: true\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedVersions: []storage.ObjectInfo{
+			{Key: "backup/app/app.sql", VersionID: "ver-1", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/app.sql", VersionID: "ver-2", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/app.sql", VersionID: "ver-3", LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{storageFactory: testStorageFactory{provider: provider}}
+
+	_, err := manager.Version(context.Background(), VersionOptions{ServiceID: "app", KeepLast: 2})
+	if err != nil {
+		t.Fatalf("keep native last: %v", err)
+	}
+
+	if provider.deleteCalls != 1 || provider.deletedVersionIDs[0] != "ver-1" {
+		t.Fatalf("expected oldest native version delete, versions=%+v", provider.deletedVersionIDs)
+	}
+}
+
+func TestBackupOverrideLatestNonNativeReusesLatestObjectKey(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	artifact := filepath.Join(workingDir, "artifact.sql")
+	if err := os.WriteFile(artifact, []byte("new-data"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/app-mysql-backup.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/app-mysql-backup.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.Backup(context.Background(), BackupOptions{
+		ServiceID:      "app",
+		Type:           "mysql",
+		ContainerName:  "app-db",
+		Local:          true,
+		OverrideLatest: true,
+		Force:          true,
+	})
+	if err != nil {
+		t.Fatalf("backup override latest: %v", err)
+	}
+
+	if outcome.Version != "2" || provider.putKey != "backup/app/2/app-mysql-backup.sql" {
+		t.Fatalf("expected latest version key reuse, outcome=%+v put=%s", outcome, provider.putKey)
+	}
+}
+
+func TestBackupOverrideLatestNativeDeletesPreviousLatestVersion(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: true\n" +
+		"    base_path: /backup\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	artifact := filepath.Join(workingDir, "artifact.sql")
+	if err := os.WriteFile(artifact, []byte("new-data"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedVersions: []storage.ObjectInfo{
+			{Key: "backup/app/app-mysql-backup.sql", VersionID: "ver-1", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/app-mysql-backup.sql", VersionID: "ver-2", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	outcome, err := manager.Backup(context.Background(), BackupOptions{
+		ServiceID:      "app",
+		Type:           "mysql",
+		ContainerName:  "app-db",
+		Local:          true,
+		OverrideLatest: true,
+		Force:          true,
+	})
+	if err != nil {
+		t.Fatalf("native override latest: %v", err)
+	}
+
+	if outcome.Version != "native" || provider.putKey != "backup/app/app-mysql-backup.sql" {
+		t.Fatalf("expected native object key upload, outcome=%+v put=%s", outcome, provider.putKey)
+	}
+	if provider.deleteCalls != 1 || provider.deletedVersionIDs[0] != "ver-2" {
+		t.Fatalf("expected previous latest native version delete, versions=%+v", provider.deletedVersionIDs)
+	}
+}
+
+func TestBackupAppliesConfiguredRetentionAfterUpload(t *testing.T) {
+	homeDir := t.TempDir()
+	workingDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	configDir := filepath.Join(homeDir, ".config", "sloth")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	mainConfig := "" +
+		"storage:\n" +
+		"  - name: default\n" +
+		"    type: s3\n" +
+		"    endpoint: https://example.com\n" +
+		"    bucket: backups\n" +
+		"    access_key_id: key\n" +
+		"    secret_access_key: secret\n" +
+		"    use_native_object_versioning: false\n" +
+		"    base_path: /backup\n" +
+		"common:\n" +
+		"  keep_version_n: 2\n"
+	if err := os.WriteFile(filepath.Join(configDir, "main.yaml"), []byte(mainConfig), 0o600); err != nil {
+		t.Fatalf("write main config: %v", err)
+	}
+
+	artifact := filepath.Join(workingDir, "artifact.sql")
+	if err := os.WriteFile(artifact, []byte("new-data"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	provider := &fakeStorageProvider{
+		listedObjects: []storage.ObjectInfo{
+			{Key: "backup/app/1/app-mysql-backup.sql", LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/2/app-mysql-backup.sql", LastModified: time.Date(2026, 4, 18, 11, 0, 0, 0, time.UTC)},
+			{Key: "backup/app/3/app-mysql-backup.sql", LastModified: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	manager := Manager{
+		envLoader:      fakeEnvLoader{values: map[string]string{}},
+		moduleRegistry: fakeModuleRegistry{module: fakeModule{artifactName: "app-mysql-backup.sql", backupFile: artifact}},
+		storageFactory: testStorageFactory{provider: provider},
+		now: func() time.Time {
+			return time.Date(2026, 4, 18, 13, 0, 0, 0, time.UTC)
+		},
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(originalWD)
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	_, err = manager.Backup(context.Background(), BackupOptions{
+		ServiceID:     "app",
+		Type:          "mysql",
+		ContainerName: "app-db",
+		Local:         true,
+		Force:         true,
+	})
+	if err != nil {
+		t.Fatalf("backup with retention: %v", err)
+	}
+
+	if provider.deleteCalls != 1 || provider.deletedKeys[0] != "backup/app/1/app-mysql-backup.sql" {
+		t.Fatalf("expected retention to delete oldest version, got %+v", provider.deletedKeys)
 	}
 }
 

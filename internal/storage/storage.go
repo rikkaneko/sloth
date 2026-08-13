@@ -23,4 +23,5 @@ type Provider interface {
 	ListObjects(ctx context.Context, prefix string) ([]ObjectInfo, error)
 	ListObjectVersions(ctx context.Context, prefix string) ([]ObjectInfo, error)
 	HeadObject(ctx context.Context, key string, versionID string) (ObjectMetadata, error)
+	Delete(ctx context.Context, key string, versionID string) error
 }

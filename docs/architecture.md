@@ -14,7 +14,7 @@ Sloth is a modular Go CLI organized around three runtime contracts:
 - `internal/container`: engine detection and execution wrappers.
 - `internal/modules`: built-in module definitions and optional YAML overrides.
   Built-in command templates are embedded from per-service files in `internal/modules/yaml/*.yaml`.
-- `internal/storage/s3`: S3 object operations (`put/get/list/list versions`).
+- `internal/storage/s3`: S3 object operations (`put/get/list/list versions/delete`).
 - `internal/versioning`: non-native incrementing version logic.
 
 ## Backup Flow
@@ -24,8 +24,16 @@ Sloth is a modular Go CLI organized around three runtime contracts:
 4. Resolve storage and compute object key:
    - Native versioning: `<base>/<service>/<artifact>`
    - Non-native versioning: `<base>/<service>/<version>/<artifact>`
-5. Upload artifact and persist `last_backup_time` in service config as Unix timestamp seconds.
-6. Log major actions at `info` level; emit external command and storage API detail at `debug` level.
+5. Upload artifact, optionally replacing latest logical version with `--override-latest-version`.
+6. Persist `last_backup_time` in service config as Unix timestamp seconds.
+7. Apply configured retention from service, storage, then common `keep_version_n` when set.
+8. Log major actions at `info` level; emit external command and storage API detail at `debug` level.
+
+## Version Flow
+- `version <service-id>` lists versions across all configured storages, grouped by storage.
+- `version <service-id> --delete <version>` deletes the displayed version.
+- `version <service-id> --keep-last N` prunes older versions by `last_modified`.
+- Native object versioning deletes exact S3 version IDs; non-native versioning deletes all objects under the selected numeric version directory.
 
 ## Restore Flow
 - Stage 1 (`restore <service-id> [--version]`): download backup object to CWD.

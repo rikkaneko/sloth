@@ -65,23 +65,24 @@ func NewManager() Manager {
 }
 
 type BackupOptions struct {
-	ServiceID     string
-	Type          string
-	ContainerName string
-	Engine        string
-	Local         bool
-	Keep          bool
-	Force         bool
-	DryRun        bool
-	UseChecksum   bool
-	UseFileSize   bool
-	Storage       string
-	EnvFile       string
-	ModuleConfig  string
-	VolumeName    string
-	VolumeNames   []string
-	UseSudo       bool
-	SudoProgram   string
+	ServiceID      string
+	Type           string
+	ContainerName  string
+	Engine         string
+	Local          bool
+	Keep           bool
+	Force          bool
+	DryRun         bool
+	UseChecksum    bool
+	UseFileSize    bool
+	Storage        string
+	EnvFile        string
+	ModuleConfig   string
+	VolumeName     string
+	VolumeNames    []string
+	OverrideLatest bool
+	UseSudo        bool
+	SudoProgram    string
 }
 
 type BackupOutcome struct {
@@ -127,6 +128,29 @@ type RemoteServiceRow struct {
 type RemoteBackupGroup struct {
 	Storage string
 	Backups []BackupObject
+}
+
+type VersionOptions struct {
+	ServiceID    string
+	Storage      string
+	Delete       string
+	KeepLast     int
+	DeleteBefore string
+	KeepAfter    string
+	DryRun       bool
+}
+
+type VersionOutcome struct {
+	Groups  []RemoteBackupGroup
+	Deleted []DeletedVersion
+	DryRun  bool
+}
+
+type DeletedVersion struct {
+	Storage   string
+	Version   string
+	ObjectKey string
+	VersionID string
 }
 
 type RestoreRetrieveOptions struct {
@@ -297,6 +321,10 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		version = versioning.NextVersionID(existing, servicePrefix)
 		objectKey = path.Join(servicePrefix, version, backupResult.ArtifactName)
 		latestObject = selectLatestVersionedCandidate(existing, servicePrefix, backupResult.ArtifactName)
+		if options.OverrideLatest && latestObject.Exists {
+			version = latestObject.VersionLabel
+			objectKey = latestObject.ObjectKey
+		}
 	}
 
 	if !options.Force && latestObject.Exists {
@@ -333,10 +361,22 @@ func (m Manager) Backup(ctx context.Context, options BackupOptions) (BackupOutco
 		return BackupOutcome{}, err
 	}
 	ui.Infof("Uploaded")
+	if options.OverrideLatest && storageConfig.UseNativeObjectVersioning && latestObject.Exists && strings.TrimSpace(latestObject.VersionID) != "" {
+		if err := provider.Delete(ctx, latestObject.ObjectKey, latestObject.VersionID); err != nil {
+			return BackupOutcome{}, fmt.Errorf("delete previous latest native version: %w", err)
+		}
+		ui.Infof("Deleted previous latest native version %s", latestObject.VersionID)
+	}
 
 	resolved.Service.LastBackupTime = strconv.FormatInt(m.now().Unix(), 10)
 	if err := saveServiceResolution(resolved); err != nil {
 		return BackupOutcome{}, err
+	}
+	keepVersionN := resolveKeepVersionN(resolved.Service, storageConfig, mainConfig)
+	if keepVersionN > 0 {
+		if _, err := pruneStorageVersions(ctx, provider, storageConfig, resolved.Service.Name, keepVersionN, false); err != nil {
+			return BackupOutcome{}, err
+		}
 	}
 
 	return BackupOutcome{
@@ -489,6 +529,159 @@ func (m Manager) listRemote(ctx context.Context, serviceID string) (ListOutcome,
 		return backupGroups[i].Storage < backupGroups[j].Storage
 	})
 	return ListOutcome{RemoteBackupGroups: backupGroups}, nil
+}
+
+func (m Manager) Version(ctx context.Context, options VersionOptions) (VersionOutcome, error) {
+	serviceID := strings.TrimSpace(options.ServiceID)
+	if serviceID == "" {
+		return VersionOutcome{}, fmt.Errorf("service id is required")
+	}
+	selectorCount := 0
+	if strings.TrimSpace(options.Delete) != "" {
+		selectorCount++
+	}
+	if options.KeepLast > 0 {
+		selectorCount++
+	}
+	if strings.TrimSpace(options.DeleteBefore) != "" {
+		selectorCount++
+	}
+	if strings.TrimSpace(options.KeepAfter) != "" {
+		selectorCount++
+	}
+	if selectorCount > 1 {
+		return VersionOutcome{}, fmt.Errorf("version accepts only one of --delete, --keep-last, --delete-before, or --keep-after")
+	}
+	if options.KeepLast < 0 {
+		return VersionOutcome{}, fmt.Errorf("--keep-last must be greater than 0")
+	}
+	cutoff := time.Time{}
+	if strings.TrimSpace(options.DeleteBefore) != "" {
+		parsed, err := config.ParseLastBackupTime(options.DeleteBefore)
+		if err != nil {
+			return VersionOutcome{}, fmt.Errorf("--delete-before invalid datetime: %w", err)
+		}
+		cutoff = parsed
+	}
+	if strings.TrimSpace(options.KeepAfter) != "" {
+		parsed, err := config.ParseLastBackupTime(options.KeepAfter)
+		if err != nil {
+			return VersionOutcome{}, fmt.Errorf("--keep-after invalid datetime: %w", err)
+		}
+		cutoff = parsed
+	}
+
+	mainConfig, _, err := config.LoadMainConfig()
+	if err != nil {
+		return VersionOutcome{}, err
+	}
+
+	serviceResult, err := config.LoadServiceConfig()
+	if err != nil {
+		return VersionOutcome{}, err
+	}
+	service, _, found := serviceResult.Config.Find(serviceID)
+	if !found {
+		service = config.ServiceEntry{Name: serviceID}
+	}
+
+	storages := make([]config.StorageConfig, 0, len(mainConfig.Storage))
+	if strings.TrimSpace(options.Storage) != "" {
+		storageConfig, ok := mainConfig.FindStorage(options.Storage)
+		if !ok {
+			return VersionOutcome{}, fmt.Errorf("storage %q not found", options.Storage)
+		}
+		storages = append(storages, storageConfig)
+	} else {
+		for _, storageConfig := range mainConfig.Storage {
+			storageName := strings.TrimSpace(storageConfig.Name)
+			if storageName == "" {
+				continue
+			}
+			resolvedStorage, ok := mainConfig.FindStorage(storageName)
+			if !ok {
+				continue
+			}
+			storages = append(storages, resolvedStorage)
+		}
+	}
+
+	deleted := []DeletedVersion{}
+	for _, storageConfig := range storages {
+		provider, err := m.storageFactory.Build(storageConfig)
+		if err != nil {
+			return VersionOutcome{}, err
+		}
+
+		if strings.TrimSpace(options.Delete) != "" {
+			removed, err := deleteStorageVersion(ctx, provider, storageConfig, serviceID, options.Delete, options.DryRun)
+			if err != nil {
+				return VersionOutcome{}, err
+			}
+			deleted = append(deleted, removed...)
+			continue
+		}
+		if options.KeepLast > 0 {
+			removed, err := pruneStorageVersions(ctx, provider, storageConfig, serviceID, options.KeepLast, options.DryRun)
+			if err != nil {
+				return VersionOutcome{}, err
+			}
+			deleted = append(deleted, removed...)
+			continue
+		}
+		if !cutoff.IsZero() {
+			removed, err := pruneStorageVersionsBefore(ctx, provider, storageConfig, serviceID, cutoff, options.DryRun)
+			if err != nil {
+				return VersionOutcome{}, err
+			}
+			deleted = append(deleted, removed...)
+		}
+	}
+	if strings.TrimSpace(options.Delete) != "" && len(deleted) == 0 {
+		if strings.TrimSpace(options.Storage) != "" {
+			return VersionOutcome{}, fmt.Errorf("backup version %q not found for service %s in storage %s", options.Delete, serviceID, options.Storage)
+		}
+		return VersionOutcome{}, fmt.Errorf("backup version %q not found for service %s", options.Delete, serviceID)
+	}
+
+	groups := make([]RemoteBackupGroup, 0, len(storages))
+	for _, storageConfig := range storages {
+		provider, err := m.storageFactory.Build(storageConfig)
+		if err != nil {
+			return VersionOutcome{}, err
+		}
+
+		backups, err := listStorageBackupObjects(ctx, provider, storageConfig, service.Name)
+		if err != nil {
+			return VersionOutcome{}, err
+		}
+		if len(backups) == 0 {
+			continue
+		}
+		groups = append(groups, RemoteBackupGroup{
+			Storage: storageConfig.Name,
+			Backups: backups,
+		})
+	}
+
+	sort.Slice(groups, func(i int, j int) bool {
+		return groups[i].Storage < groups[j].Storage
+	})
+	sort.Slice(deleted, func(i int, j int) bool {
+		if deleted[i].Storage == deleted[j].Storage {
+			if deleted[i].Version == deleted[j].Version {
+				return deleted[i].ObjectKey < deleted[j].ObjectKey
+			}
+			return deleted[i].Version < deleted[j].Version
+		}
+		return deleted[i].Storage < deleted[j].Storage
+	})
+
+	return VersionOutcome{
+		Groups:  groups,
+		Deleted: deleted,
+		DryRun:  options.DryRun,
+	}, nil
 }
 
 func (m Manager) RestoreRetrieve(ctx context.Context, options RestoreRetrieveOptions) (RestoreRetrieveOutcome, error) {
@@ -1055,6 +1248,287 @@ func extractObjectExtension(objectKey string) string {
 		return "bin"
 	}
 	return trimmed
+}
+
+func resolveKeepVersionN(service config.ServiceEntry, storageConfig config.StorageConfig, mainConfig config.MainConfig) int {
+	if service.KeepVersionN > 0 {
+		return service.KeepVersionN
+	}
+	if storageConfig.KeepVersionN > 0 {
+		return storageConfig.KeepVersionN
+	}
+	if mainConfig.Common.KeepVersionN > 0 {
+		return mainConfig.Common.KeepVersionN
+	}
+	return 0
+}
+
+func listStorageBackupObjects(
+	ctx context.Context,
+	provider storage.Provider,
+	storageConfig config.StorageConfig,
+	serviceID string,
+) ([]BackupObject, error) {
+	basePath := config.NormalizeBasePath(storageConfig.BasePath)
+	servicePrefix := versioning.BuildVersionedPrefix(basePath, serviceID)
+
+	objects := []storage.ObjectInfo{}
+	var err error
+	if storageConfig.UseNativeObjectVersioning {
+		objects, err = provider.ListObjectVersions(ctx, servicePrefix+"/")
+	} else {
+		objects, err = provider.ListObjects(ctx, servicePrefix+"/")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return buildBackupObjects(objects, servicePrefix, storageConfig.UseNativeObjectVersioning, storageConfig.Name), nil
+}
+
+func deleteStorageVersion(
+	ctx context.Context,
+	provider storage.Provider,
+	storageConfig config.StorageConfig,
+	serviceID string,
+	versionLabel string,
+	dryRun bool,
+) ([]DeletedVersion, error) {
+	basePath := config.NormalizeBasePath(storageConfig.BasePath)
+	servicePrefix := versioning.BuildVersionedPrefix(basePath, serviceID)
+	deleted := []DeletedVersion{}
+
+	if storageConfig.UseNativeObjectVersioning {
+		versions, err := provider.ListObjectVersions(ctx, servicePrefix+"/")
+		if err != nil {
+			return nil, fmt.Errorf("list existing native versions: %w", err)
+		}
+		for _, object := range versions {
+			if object.VersionID != versionLabel {
+				continue
+			}
+			if !dryRun {
+				if err := provider.Delete(ctx, object.Key, object.VersionID); err != nil {
+					return nil, err
+				}
+			}
+			deleted = append(deleted, DeletedVersion{
+				Storage:   storageConfig.Name,
+				Version:   versionLabel,
+				ObjectKey: object.Key,
+				VersionID: object.VersionID,
+			})
+		}
+		return deleted, nil
+	}
+
+	objects, err := provider.ListObjects(ctx, servicePrefix+"/")
+	if err != nil {
+		return nil, fmt.Errorf("list existing backup objects: %w", err)
+	}
+	for _, object := range objects {
+		if versioning.ExtractVersionFromKey(object.Key, servicePrefix) != versionLabel {
+			continue
+		}
+		if !dryRun {
+			if err := provider.Delete(ctx, object.Key, ""); err != nil {
+				return nil, err
+			}
+		}
+		deleted = append(deleted, DeletedVersion{
+			Storage:   storageConfig.Name,
+			Version:   versionLabel,
+			ObjectKey: object.Key,
+		})
+	}
+	return deleted, nil
+}
+
+func pruneStorageVersions(
+	ctx context.Context,
+	provider storage.Provider,
+	storageConfig config.StorageConfig,
+	serviceID string,
+	keepLast int,
+	dryRun bool,
+) ([]DeletedVersion, error) {
+	if keepLast <= 0 {
+		return nil, nil
+	}
+
+	basePath := config.NormalizeBasePath(storageConfig.BasePath)
+	servicePrefix := versioning.BuildVersionedPrefix(basePath, serviceID)
+	deleted := []DeletedVersion{}
+
+	if storageConfig.UseNativeObjectVersioning {
+		versions, err := provider.ListObjectVersions(ctx, servicePrefix+"/")
+		if err != nil {
+			return nil, fmt.Errorf("list existing native versions: %w", err)
+		}
+		versioning.SortByLastModifiedDesc(versions)
+		for index, object := range versions {
+			if index < keepLast {
+				continue
+			}
+			versionLabel := object.VersionID
+			if versionLabel == "" {
+				versionLabel = "latest"
+			}
+			if !dryRun {
+				if err := provider.Delete(ctx, object.Key, object.VersionID); err != nil {
+					return nil, err
+				}
+			}
+			deleted = append(deleted, DeletedVersion{
+				Storage:   storageConfig.Name,
+				Version:   versionLabel,
+				ObjectKey: object.Key,
+				VersionID: object.VersionID,
+			})
+		}
+		return deleted, nil
+	}
+
+	objects, err := provider.ListObjects(ctx, servicePrefix+"/")
+	if err != nil {
+		return nil, fmt.Errorf("list existing backup objects: %w", err)
+	}
+	latestByVersion := map[string]time.Time{}
+	for _, object := range objects {
+		versionLabel := versioning.ExtractVersionFromKey(object.Key, servicePrefix)
+		if versionLabel == "" {
+			continue
+		}
+		current, exists := latestByVersion[versionLabel]
+		if !exists || object.LastModified.After(current) {
+			latestByVersion[versionLabel] = object.LastModified
+		}
+	}
+
+	type versionRank struct {
+		Version      string
+		LastModified time.Time
+	}
+	ordered := make([]versionRank, 0, len(latestByVersion))
+	for versionLabel, lastModified := range latestByVersion {
+		ordered = append(ordered, versionRank{Version: versionLabel, LastModified: lastModified})
+	}
+	sort.Slice(ordered, func(i int, j int) bool {
+		if ordered[i].LastModified.Equal(ordered[j].LastModified) {
+			left, leftErr := strconv.Atoi(ordered[i].Version)
+			right, rightErr := strconv.Atoi(ordered[j].Version)
+			if leftErr == nil && rightErr == nil {
+				return left > right
+			}
+			return ordered[i].Version > ordered[j].Version
+		}
+		return ordered[i].LastModified.After(ordered[j].LastModified)
+	})
+
+	pruneVersions := map[string]struct{}{}
+	for index, item := range ordered {
+		if index >= keepLast {
+			pruneVersions[item.Version] = struct{}{}
+		}
+	}
+	for _, object := range objects {
+		versionLabel := versioning.ExtractVersionFromKey(object.Key, servicePrefix)
+		if _, shouldDelete := pruneVersions[versionLabel]; !shouldDelete {
+			continue
+		}
+		if !dryRun {
+			if err := provider.Delete(ctx, object.Key, ""); err != nil {
+				return nil, err
+			}
+		}
+		deleted = append(deleted, DeletedVersion{
+			Storage:   storageConfig.Name,
+			Version:   versionLabel,
+			ObjectKey: object.Key,
+		})
+	}
+	return deleted, nil
+}
+
+func pruneStorageVersionsBefore(
+	ctx context.Context,
+	provider storage.Provider,
+	storageConfig config.StorageConfig,
+	serviceID string,
+	cutoff time.Time,
+	dryRun bool,
+) ([]DeletedVersion, error) {
+	basePath := config.NormalizeBasePath(storageConfig.BasePath)
+	servicePrefix := versioning.BuildVersionedPrefix(basePath, serviceID)
+	deleted := []DeletedVersion{}
+
+	if storageConfig.UseNativeObjectVersioning {
+		versions, err := provider.ListObjectVersions(ctx, servicePrefix+"/")
+		if err != nil {
+			return nil, fmt.Errorf("list existing native versions: %w", err)
+		}
+		for _, object := range versions {
+			if !object.LastModified.Before(cutoff) {
+				continue
+			}
+			versionLabel := object.VersionID
+			if versionLabel == "" {
+				versionLabel = "latest"
+			}
+			if !dryRun {
+				if err := provider.Delete(ctx, object.Key, object.VersionID); err != nil {
+					return nil, err
+				}
+			}
+			deleted = append(deleted, DeletedVersion{
+				Storage:   storageConfig.Name,
+				Version:   versionLabel,
+				ObjectKey: object.Key,
+				VersionID: object.VersionID,
+			})
+		}
+		return deleted, nil
+	}
+
+	objects, err := provider.ListObjects(ctx, servicePrefix+"/")
+	if err != nil {
+		return nil, fmt.Errorf("list existing backup objects: %w", err)
+	}
+	latestByVersion := map[string]time.Time{}
+	for _, object := range objects {
+		versionLabel := versioning.ExtractVersionFromKey(object.Key, servicePrefix)
+		if versionLabel == "" {
+			continue
+		}
+		current, exists := latestByVersion[versionLabel]
+		if !exists || object.LastModified.After(current) {
+			latestByVersion[versionLabel] = object.LastModified
+		}
+	}
+
+	pruneVersions := map[string]struct{}{}
+	for versionLabel, lastModified := range latestByVersion {
+		if lastModified.Before(cutoff) {
+			pruneVersions[versionLabel] = struct{}{}
+		}
+	}
+	for _, object := range objects {
+		versionLabel := versioning.ExtractVersionFromKey(object.Key, servicePrefix)
+		if _, shouldDelete := pruneVersions[versionLabel]; !shouldDelete {
+			continue
+		}
+		if !dryRun {
+			if err := provider.Delete(ctx, object.Key, ""); err != nil {
+				return nil, err
+			}
+		}
+		deleted = append(deleted, DeletedVersion{
+			Storage:   storageConfig.Name,
+			Version:   versionLabel,
+			ObjectKey: object.Key,
+		})
+	}
+	return deleted, nil
 }
 
 func buildBackupObjects(objects []storage.ObjectInfo, servicePrefix string, useNativeObjectVersioning bool, storageName string) []BackupObject {

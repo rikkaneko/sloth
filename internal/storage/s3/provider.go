@@ -22,6 +22,7 @@ type Provider struct {
 	client           *awss3.Client
 	putObjectClient  putObjectClient
 	headObjectClient headObjectClient
+	deleteClient     deleteObjectClient
 	bucket           string
 }
 
@@ -31,6 +32,10 @@ type putObjectClient interface {
 
 type headObjectClient interface {
 	HeadObject(ctx context.Context, params *awss3.HeadObjectInput, optFns ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error)
+}
+
+type deleteObjectClient interface {
+	DeleteObject(ctx context.Context, params *awss3.DeleteObjectInput, optFns ...func(*awss3.Options)) (*awss3.DeleteObjectOutput, error)
 }
 
 func NewProvider(cfg config.StorageConfig) (*Provider, error) {
@@ -55,6 +60,7 @@ func NewProvider(cfg config.StorageConfig) (*Provider, error) {
 		client:           client,
 		putObjectClient:  client,
 		headObjectClient: client,
+		deleteClient:     client,
 		bucket:           cfg.Bucket,
 	}, nil
 }
@@ -201,6 +207,29 @@ func (p *Provider) HeadObject(ctx context.Context, key string, versionID string)
 	}
 	ui.Debugf("s3::HeadObject response {content_length:%d, checksum_sha256:%q}", metadata.Size, metadata.ChecksumSHA256)
 	return metadata, nil
+}
+
+func (p *Provider) Delete(ctx context.Context, key string, versionID string) error {
+	input := &awss3.DeleteObjectInput{
+		Bucket: aws.String(p.bucket),
+		Key:    aws.String(key),
+	}
+	if versionID != "" {
+		input.VersionId = aws.String(versionID)
+	}
+
+	ui.Debugf("s3::DeleteObject {bucket:%q, key:%q, version_id:%q}", p.bucket, key, versionID)
+	output, err := p.deleteClient.DeleteObject(ctx, input)
+	if err != nil {
+		return fmt.Errorf("delete object %s: %w", key, err)
+	}
+	ui.Debugf(
+		"s3::DeleteObject response {version_id:%q, delete_marker:%t}",
+		aws.ToString(output.VersionId),
+		aws.ToBool(output.DeleteMarker),
+	)
+
+	return nil
 }
 
 func checksumFileSHA256Base64(localPath string) (string, error) {

@@ -26,6 +26,7 @@ type App struct {
 type manager interface {
 	Backup(ctx context.Context, options orchestrator.BackupOptions) (orchestrator.BackupOutcome, error)
 	List(ctx context.Context, options orchestrator.ListOptions) (orchestrator.ListOutcome, error)
+	Version(ctx context.Context, options orchestrator.VersionOptions) (orchestrator.VersionOutcome, error)
 	RestoreRetrieve(ctx context.Context, options orchestrator.RestoreRetrieveOptions) (orchestrator.RestoreRetrieveOutcome, error)
 	RestoreApply(ctx context.Context, options orchestrator.RestoreApplyOptions) (orchestrator.RestoreApplyOutcome, error)
 }
@@ -88,6 +89,12 @@ func (a App) Run(ctx context.Context, args []string) error {
 			return nil
 		}
 		return a.runList(ctx, runArgs[1:])
+	case "version":
+		if hasHelpFlag(runArgs[1:]) {
+			a.printVersionHelp()
+			return nil
+		}
+		return a.runVersion(ctx, runArgs[1:])
 	case "restore":
 		if hasHelpFlag(runArgs[1:]) {
 			a.printRestoreHelp()
@@ -122,6 +129,7 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 	var dryRun bool
 	var useChecksum bool
 	var useFileSizeCheck bool
+	var overrideLatest bool
 	var debugMode bool
 
 	flagSet.StringVar(&typeValue, "type", "", "service type")
@@ -148,6 +156,7 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 	flagSet.BoolVar(&dryRun, "dry-run", false, "dry run upload and skip final put call")
 	flagSet.BoolVar(&useChecksum, "use-checksum", false, "enable checksum delta check")
 	flagSet.BoolVar(&useFileSizeCheck, "use-file-size-check", false, "enable file-size delta check")
+	flagSet.BoolVar(&overrideLatest, "override-latest-version", false, "replace latest backup version instead of creating a new version")
 	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
 	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
 
@@ -166,23 +175,24 @@ func (a App) runBackup(ctx context.Context, args []string, global globalOptions)
 	volumeNames := splitCSV(volumeNamesRaw)
 
 	outcome, err := a.manager.Backup(ctx, orchestrator.BackupOptions{
-		ServiceID:     serviceID,
-		Type:          typeValue,
-		ContainerName: containerName,
-		Engine:        engine,
-		Local:         local,
-		Keep:          keep,
-		Force:         force,
-		DryRun:        dryRun,
-		UseChecksum:   useChecksum,
-		UseFileSize:   useFileSizeCheck,
-		Storage:       storageName,
-		EnvFile:       envFile,
-		ModuleConfig:  moduleConfig,
-		VolumeName:    volumeName,
-		VolumeNames:   volumeNames,
-		UseSudo:       global.UseSudo,
-		SudoProgram:   global.SudoProgram,
+		ServiceID:      serviceID,
+		Type:           typeValue,
+		ContainerName:  containerName,
+		Engine:         engine,
+		Local:          local,
+		Keep:           keep,
+		Force:          force,
+		DryRun:         dryRun,
+		UseChecksum:    useChecksum,
+		UseFileSize:    useFileSizeCheck,
+		Storage:        storageName,
+		EnvFile:        envFile,
+		ModuleConfig:   moduleConfig,
+		VolumeName:     volumeName,
+		VolumeNames:    volumeNames,
+		OverrideLatest: overrideLatest,
+		UseSudo:        global.UseSudo,
+		SudoProgram:    global.SudoProgram,
 	})
 	if err != nil {
 		return err
@@ -281,6 +291,84 @@ func (a App) runList(ctx context.Context, args []string) error {
 
 	fmt.Printf("\n%s\n", serviceID)
 	printBackupObjectsTable(outcome.Backups, showObjectKey)
+	return nil
+}
+
+func (a App) runVersion(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("version requires <service-id>")
+	}
+
+	serviceID := args[0]
+	flagSet := flag.NewFlagSet("version", flag.ContinueOnError)
+	flagSet.SetOutput(os.Stdout)
+
+	var storageName string
+	var deleteVersion string
+	var keepLast int
+	var deleteBefore string
+	var keepAfter string
+	var dryRun bool
+	var debugMode bool
+
+	flagSet.StringVar(&storageName, "storage", "", "storage config name")
+	flagSet.StringVar(&storageName, "s", "", "storage config name")
+	flagSet.StringVar(&deleteVersion, "delete", "", "delete backup version")
+	flagSet.IntVar(&keepLast, "keep-last", 0, "keep latest N versions and delete older versions")
+	flagSet.StringVar(&deleteBefore, "delete-before", "", "delete versions before datetime")
+	flagSet.StringVar(&keepAfter, "keep-after", "", "keep versions at or after datetime and delete older versions")
+	flagSet.BoolVar(&dryRun, "dry-run", false, "show versions that would be deleted without deleting them")
+	flagSet.BoolVar(&debugMode, "debug", false, "show debug logs")
+	flagSet.BoolVar(&debugMode, "d", false, "show debug logs")
+
+	if err := flagSet.Parse(args[1:]); err != nil {
+		return err
+	}
+	ui.SetDebug(debugMode)
+	if len(flagSet.Args()) > 0 {
+		return fmt.Errorf("version accepts at most one <service-id>")
+	}
+	selectorCount := 0
+	if strings.TrimSpace(deleteVersion) != "" {
+		selectorCount++
+	}
+	if keepLast > 0 {
+		selectorCount++
+	}
+	if strings.TrimSpace(deleteBefore) != "" {
+		selectorCount++
+	}
+	if strings.TrimSpace(keepAfter) != "" {
+		selectorCount++
+	}
+	if selectorCount > 1 {
+		return fmt.Errorf("version accepts only one of --delete, --keep-last, --delete-before, or --keep-after")
+	}
+	if keepLast < 0 {
+		return fmt.Errorf("--keep-last must be greater than 0")
+	}
+
+	outcome, err := a.manager.Version(ctx, orchestrator.VersionOptions{
+		ServiceID:    serviceID,
+		Storage:      storageName,
+		Delete:       deleteVersion,
+		KeepLast:     keepLast,
+		DeleteBefore: deleteBefore,
+		KeepAfter:    keepAfter,
+		DryRun:       dryRun,
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(outcome.Deleted) > 0 {
+		printDeletedVersionsTable(outcome.Deleted, outcome.DryRun)
+	}
+	if len(outcome.Groups) == 0 {
+		fmt.Printf("No backups found for service %s\n", serviceID)
+		return nil
+	}
+	printRemoteBackupGroups(outcome.Groups, false)
 	return nil
 }
 
@@ -524,6 +612,20 @@ func printRemoteBackupGroups(groups []orchestrator.RemoteBackupGroup, showObject
 		fmt.Printf("\n#%d Storage: %s\n", idx, group.Storage)
 		printBackupObjectsTable(group.Backups, showObjectKey)
 	}
+}
+
+func printDeletedVersionsTable(deleted []orchestrator.DeletedVersion, dryRun bool) {
+	rows := make([][]string, 0, len(deleted))
+	for _, item := range deleted {
+		rows = append(rows, []string{item.Storage, item.Version, item.ObjectKey})
+	}
+
+	if dryRun {
+		fmt.Println("\nVersions marked to delete")
+	} else {
+		fmt.Println("\nDeleted versions")
+	}
+	ui.PrintSolidTable([]string{"storage", "version", "object_key"}, rows)
 }
 
 func humanReadableBytes(size int64) string {

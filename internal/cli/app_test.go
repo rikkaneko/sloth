@@ -15,9 +15,11 @@ type fakeManager struct {
 	restoreOptions  orchestrator.RestoreApplyOptions
 	retrieveOptions orchestrator.RestoreRetrieveOptions
 	listOptions     orchestrator.ListOptions
+	versionOptions  orchestrator.VersionOptions
 
 	backupOutcome  orchestrator.BackupOutcome
 	listOutcome    orchestrator.ListOutcome
+	versionOutcome orchestrator.VersionOutcome
 	restoreOutcome orchestrator.RestoreApplyOutcome
 	retrieveResult orchestrator.RestoreRetrieveOutcome
 }
@@ -30,6 +32,11 @@ func (f *fakeManager) Backup(ctx context.Context, options orchestrator.BackupOpt
 func (f *fakeManager) List(ctx context.Context, options orchestrator.ListOptions) (orchestrator.ListOutcome, error) {
 	f.listOptions = options
 	return f.listOutcome, nil
+}
+
+func (f *fakeManager) Version(ctx context.Context, options orchestrator.VersionOptions) (orchestrator.VersionOutcome, error) {
+	f.versionOptions = options
+	return f.versionOutcome, nil
 }
 
 func (f *fakeManager) RestoreRetrieve(ctx context.Context, options orchestrator.RestoreRetrieveOptions) (orchestrator.RestoreRetrieveOutcome, error) {
@@ -138,7 +145,7 @@ func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	output, err := runWithCapturedStdout(t, func() error {
 		return app.Run(
 			context.Background(),
-			[]string{"backup", "svc", "-t", "mysql", "-c", "svc-db", "-E", "docker", "-s", "archive", "-e", ".env.local", "-m", "mod.yaml", "-k", "--dry-run", "--force", "--use-file-size-check", "--use-checksum", "-d"},
+			[]string{"backup", "svc", "-t", "mysql", "-c", "svc-db", "-E", "docker", "-s", "archive", "-e", ".env.local", "-m", "mod.yaml", "-k", "--dry-run", "--force", "--use-file-size-check", "--use-checksum", "--override-latest-version", "-d"},
 		)
 	})
 	if err != nil {
@@ -156,6 +163,9 @@ func TestRunBackupAcceptsShortFlagsAndPrintsBackupTable(t *testing.T) {
 	}
 	if !manager.backupOptions.Keep || !manager.backupOptions.DryRun {
 		t.Fatalf("expected keep and dry-run flags to be passed: %+v", manager.backupOptions)
+	}
+	if !manager.backupOptions.OverrideLatest {
+		t.Fatalf("expected override latest flag to be passed: %+v", manager.backupOptions)
 	}
 	if !strings.Contains(output, "| version ") {
 		t.Fatalf("expected backup table output\n%s", output)
@@ -415,6 +425,111 @@ func TestRunListWithServiceIDShowObjectKey(t *testing.T) {
 	assertContains(t, output, "object_key")
 	assertContains(t, output, "backup/svc/1/svc.sql")
 	assertContains(t, output, "2.0 KB")
+}
+
+func TestRunVersionForwardsDeleteAndStorage(t *testing.T) {
+	manager := &fakeManager{
+		versionOutcome: orchestrator.VersionOutcome{
+			Deleted: []orchestrator.DeletedVersion{
+				{
+					Storage:   "archive",
+					Version:   "2",
+					ObjectKey: "backup/svc/2/svc.sql",
+				},
+			},
+			Groups: []orchestrator.RemoteBackupGroup{
+				{
+					Storage: "archive",
+					Backups: []orchestrator.BackupObject{
+						{
+							Key:          "backup/svc/1/svc.sql",
+							Version:      "1",
+							Size:         1024,
+							LastModified: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC),
+						},
+					},
+				},
+			},
+		},
+	}
+	app := NewApp("test")
+	app.manager = manager
+
+	manager.versionOutcome.DryRun = true
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"version", "svc", "--storage", "archive", "--delete", "2", "--dry-run", "-d"})
+	})
+	if err != nil {
+		t.Fatalf("run version delete: %v", err)
+	}
+
+	if manager.versionOptions.ServiceID != "svc" || manager.versionOptions.Storage != "archive" || manager.versionOptions.Delete != "2" || !manager.versionOptions.DryRun {
+		t.Fatalf("unexpected version options: %+v", manager.versionOptions)
+	}
+	assertContains(t, output, "Versions marked to delete")
+	assertContains(t, output, "Storage: archive")
+	assertContains(t, output, "| version ")
+}
+
+func TestRunVersionForwardsKeepLast(t *testing.T) {
+	manager := &fakeManager{}
+	app := NewApp("test")
+	app.manager = manager
+
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"version", "svc", "--keep-last", "3"})
+	})
+	if err != nil {
+		t.Fatalf("run version keep-last: %v", err)
+	}
+
+	if manager.versionOptions.ServiceID != "svc" || manager.versionOptions.KeepLast != 3 {
+		t.Fatalf("unexpected version options: %+v", manager.versionOptions)
+	}
+}
+
+func TestRunVersionForwardsDeleteBefore(t *testing.T) {
+	manager := &fakeManager{}
+	app := NewApp("test")
+	app.manager = manager
+
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"version", "svc", "--delete-before", "2026-04-18T11:00:00Z", "--dry-run"})
+	})
+	if err != nil {
+		t.Fatalf("run version delete-before: %v", err)
+	}
+
+	if manager.versionOptions.ServiceID != "svc" || manager.versionOptions.DeleteBefore != "2026-04-18T11:00:00Z" || !manager.versionOptions.DryRun {
+		t.Fatalf("unexpected version options: %+v", manager.versionOptions)
+	}
+}
+
+func TestRunVersionForwardsKeepAfter(t *testing.T) {
+	manager := &fakeManager{}
+	app := NewApp("test")
+	app.manager = manager
+
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"version", "svc", "--keep-after", "1713355200"})
+	})
+	if err != nil {
+		t.Fatalf("run version keep-after: %v", err)
+	}
+
+	if manager.versionOptions.ServiceID != "svc" || manager.versionOptions.KeepAfter != "1713355200" {
+		t.Fatalf("unexpected version options: %+v", manager.versionOptions)
+	}
+}
+
+func TestRunVersionRejectsDeleteWithKeepLast(t *testing.T) {
+	app := NewApp("test")
+	_, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"version", "svc", "--delete", "1", "--keep-last", "2", "--delete-before", "2026-04-18T11:00:00Z"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "version accepts only one") {
+		t.Fatalf("expected mutually exclusive selector error, got %v", err)
+	}
 }
 
 func TestRunListRemoteGroupedByStorage(t *testing.T) {

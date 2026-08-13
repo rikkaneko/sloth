@@ -35,6 +35,7 @@ type ServiceEntry struct {
 	ModuleConfig   string            `yaml:"module_config,omitempty"`
 	VolumeName     string            `yaml:"volume_name,omitempty"`
 	VolumeNames    []string          `yaml:"volume_names,omitempty"`
+	KeepVersionN   int               `yaml:"keep_version_n,omitempty"`
 	Meta           map[string]string `yaml:"meta,omitempty"`
 }
 
@@ -45,6 +46,7 @@ type MainConfig struct {
 
 type CommonConfig struct {
 	FileDeltaCheck string `yaml:"file_delta_check,omitempty"`
+	KeepVersionN   int    `yaml:"keep_version_n,omitempty"`
 }
 
 type StorageConfig struct {
@@ -58,6 +60,7 @@ type StorageConfig struct {
 	SecretAccessKey           string `yaml:"secret_access_key"`
 	UseNativeObjectVersioning bool   `yaml:"use_native_object_versioning"`
 	BasePath                  string `yaml:"base_path"`
+	KeepVersionN              int    `yaml:"keep_version_n,omitempty"`
 }
 
 type ServiceLoadResult struct {
@@ -130,6 +133,9 @@ func (cfg MainConfig) Validate() error {
 	default:
 		return fmt.Errorf("common.file_delta_check %q unsupported; use checksum or file_size", cfg.Common.FileDeltaCheck)
 	}
+	if cfg.Common.KeepVersionN < 0 {
+		return fmt.Errorf("common.keep_version_n must be greater than 0 when set")
+	}
 
 	names := map[string]struct{}{}
 	for i := range cfg.Storage {
@@ -159,6 +165,9 @@ func (cfg MainConfig) Validate() error {
 		}
 		if s.AccessKeyID == "" || s.SecretAccessKey == "" {
 			return fmt.Errorf("storage[%s] access_key_id and secret_access_key are required", s.Name)
+		}
+		if s.KeepVersionN < 0 {
+			return fmt.Errorf("storage[%s] keep_version_n must be greater than 0 when set", s.Name)
 		}
 	}
 
@@ -190,6 +199,9 @@ func (cfg ServiceConfig) Validate() error {
 		}
 		if _, err := ParseLastBackupTime(s.LastBackupTime); err != nil {
 			return fmt.Errorf("service[%s] last_backup_time invalid: %w", s.Name, err)
+		}
+		if s.KeepVersionN < 0 {
+			return fmt.Errorf("service[%s] keep_version_n must be greater than 0 when set", s.Name)
 		}
 	}
 	return nil

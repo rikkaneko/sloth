@@ -46,6 +46,9 @@ func (a App) printCommandHelp(command string) error {
 	case "list":
 		a.printListHelp()
 		return nil
+	case "version":
+		a.printVersionHelp()
+		return nil
 	default:
 		return fmt.Errorf("unknown help topic %q", command)
 	}
@@ -60,12 +63,13 @@ func (a App) printRootHelp() {
 		"SYNOPSIS",
 		"    sloth [global-options] <command> [<args>]",
 		"    sloth <command> [<args>]",
-		"    sloth help [backup|restore|list]",
+		"    sloth help [backup|restore|list|version]",
 		"",
 		"COMMANDS",
 		"    backup   create and upload a backup artifact",
 		"    restore  retrieve or apply a backup artifact",
 		"    list     list configured services or backup versions",
+		"    version  manage available backup versions",
 		"    help     show help for root or subcommand",
 		"",
 		"GLOBAL OPTIONS",
@@ -114,6 +118,7 @@ func (a App) printBackupHelp() {
 		"    --dry-run                        dry run upload and skip final put call",
 		"    --use-checksum                   enable checksum delta check",
 		"    --use-file-size-check            enable file-size delta check",
+		"    --override-latest-version        replace latest backup version instead of creating a new version",
 		"    -d, --debug                      show debug logs",
 		"    -h, --help                       show this help message",
 		"",
@@ -183,6 +188,39 @@ func (a App) printListHelp() {
 		"    --remote  list from remote storage instead of local service config",
 		"    --show-object-key  show object_key column for service backup list",
 		"    -h, --help   show this help message",
+		"",
+	}
+	lines = append(lines, formatDefaultsSection(catalog)...)
+	fmt.Println(strings.Join(lines, "\n"))
+}
+
+func (a App) printVersionHelp() {
+	catalog := buildHelpCatalog()
+	storages := joinValues(catalog.storages)
+
+	lines := []string{
+		"NAME",
+		"    sloth version - manage available backup versions",
+		"",
+		"SYNOPSIS",
+		"    sloth [global-options] version <service-id> [options]",
+		"    sloth version <service-id> [options]",
+		"",
+		"GLOBAL OPTIONS",
+		"    -h, --help   show this help message",
+		"    -C, --config-home <dir>  config directory (default: ~/.config/sloth)",
+		"    -S, --sudo               prepend privileged program for container runtime commands",
+		"    --sudo-program <cmd>     privileged program name (default: sudo)",
+		"",
+		"OPTIONS",
+		fmt.Sprintf("    -s, --storage <storage-name>  manage one storage only (available: %s)", storages),
+		"    --delete <version>           delete the displayed backup version",
+		"    --keep-last <N>              keep latest N versions and delete older versions",
+		"    --delete-before <datetime>   delete versions before RFC3339 or Unix timestamp",
+		"    --keep-after <datetime>      keep versions at or after RFC3339 or Unix timestamp",
+		"    --dry-run                    show versions that would be deleted without deleting them",
+		"    -d, --debug                  show debug logs",
+		"    -h, --help                   show this help message",
 		"",
 	}
 	lines = append(lines, formatDefaultsSection(catalog)...)

@@ -213,6 +213,55 @@ func TestMainConfigValidateRejectsInvalidCommonFileDeltaCheck(t *testing.T) {
 	}
 }
 
+func TestMainConfigValidateAcceptsKeepVersionN(t *testing.T) {
+	cfg := MainConfig{
+		Storage: []StorageConfig{
+			{
+				Name:            "default",
+				Type:            "s3",
+				Endpoint:        "https://example.com",
+				Bucket:          "backup",
+				AccessKeyID:     "key",
+				SecretAccessKey: "secret",
+				KeepVersionN:    2,
+			},
+		},
+		Common: CommonConfig{
+			KeepVersionN: 3,
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate keep_version_n config: %v", err)
+	}
+}
+
+func TestMainConfigValidateRejectsNegativeKeepVersionN(t *testing.T) {
+	cfg := MainConfig{
+		Storage: []StorageConfig{
+			{
+				Name:            "default",
+				Type:            "s3",
+				Endpoint:        "https://example.com",
+				Bucket:          "backup",
+				AccessKeyID:     "key",
+				SecretAccessKey: "secret",
+				KeepVersionN:    -1,
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected negative storage keep_version_n error")
+	}
+
+	cfg.Storage[0].KeepVersionN = 0
+	cfg.Common.KeepVersionN = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected negative common keep_version_n error")
+	}
+}
+
 func TestResolveConfigHomeUsesOverride(t *testing.T) {
 	t.Cleanup(func() {
 		if err := SetConfigHomeOverride(""); err != nil {
@@ -230,6 +279,38 @@ func TestResolveConfigHomeUsesOverride(t *testing.T) {
 	}
 	if configHome != "/tmp/sloth-config" {
 		t.Fatalf("expected /tmp/sloth-config, got %s", configHome)
+	}
+}
+
+func TestServiceConfigValidateAcceptsKeepVersionN(t *testing.T) {
+	cfg := ServiceConfig{
+		Service: []ServiceEntry{
+			{
+				Name:         "svc",
+				Type:         "mysql",
+				KeepVersionN: 4,
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate service keep_version_n: %v", err)
+	}
+}
+
+func TestServiceConfigValidateRejectsNegativeKeepVersionN(t *testing.T) {
+	cfg := ServiceConfig{
+		Service: []ServiceEntry{
+			{
+				Name:         "svc",
+				Type:         "mysql",
+				KeepVersionN: -1,
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected negative service keep_version_n error")
 	}
 }
 

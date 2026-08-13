@@ -52,6 +52,7 @@ func TestRunRootHelpWithDynamicValues(t *testing.T) {
 	assertContains(t, output, "Available service types:")
 	assertContains(t, output, "volume")
 	assertContains(t, output, "Available container engines: docker, podman")
+	assertContains(t, output, "version  manage available backup versions")
 	assertContains(t, output, "archive")
 	assertContains(t, output, "default")
 }
@@ -74,8 +75,29 @@ func TestRunBackupHelpWithoutServiceID(t *testing.T) {
 	assertContains(t, output, "--force")
 	assertContains(t, output, "--use-checksum")
 	assertContains(t, output, "--use-file-size-check")
+	assertContains(t, output, "--override-latest-version")
 	assertContains(t, output, "-d, --debug")
 	assertContains(t, output, "available:")
+}
+
+func TestRunVersionHelpIncludesManagementOptions(t *testing.T) {
+	app := NewApp("test")
+	output, err := runWithCapturedStdout(t, func() error {
+		return app.Run(context.Background(), []string{"version", "--help"})
+	})
+	if err != nil {
+		t.Fatalf("run version help: %v", err)
+	}
+
+	assertContains(t, output, "sloth version <service-id> [options]")
+	assertContains(t, output, "--delete <version>")
+	assertContains(t, output, "--keep-last <N>")
+	assertContains(t, output, "--delete-before <datetime>")
+	assertContains(t, output, "--keep-after <datetime>")
+	assertContains(t, output, "RFC3339 or Unix timestamp")
+	assertContains(t, output, "--dry-run")
+	assertContains(t, output, "-s, --storage <storage-name>")
+	assertContains(t, output, "GLOBAL OPTIONS")
 }
 
 func TestRunHelpSubcommandForRestore(t *testing.T) {

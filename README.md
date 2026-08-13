@@ -49,6 +49,7 @@ storage:
 
 common:
   file_delta_check: checksum # checksum | file_size
+  keep_version_n: 5 # optional; unset keeps unlimited versions
 ```
 
 Service config example:
@@ -60,6 +61,7 @@ service:
     storage: default
     engine: docker
     env_file: .env
+    keep_version_n: 3 # optional; overrides storage/common retention
 ```
 
 ## Features
@@ -76,7 +78,8 @@ service:
 - Automatic environment variable loading with `${VAR}` interpolation
 - List remote service backups
 - Backup delta-check strategies: checksum (default) or file-size
-- Backup keep/dry-run options: `-k|--keep`, `--dry-run`
+- Backup keep/dry-run/override options: `-k|--keep`, `--dry-run`, `--override-latest-version`
+- Version management and retention pruning with `sloth version`
 
 ## Usage Examples
 ### Create a backup for a MySQL database deployed in a container
@@ -109,6 +112,12 @@ sloth backup app-db --keep
 
 ```bash
 sloth backup app-db --dry-run
+```
+
+### Replace the latest backup version instead of creating a new one
+
+```bash
+sloth backup app-db --override-latest-version
 ```
 
 ### Use a custom config home globally
@@ -153,6 +162,19 @@ sloth list --remote
 ```bash
 sloth list --remote app-db
 ```
+
+### Manage available versions across all configured storages
+
+```bash
+sloth version app-db
+sloth version app-db --delete 2
+sloth version app-db --keep-last 5
+sloth version app-db --delete-before 2026-04-18T11:00:00Z
+sloth version app-db --keep-after 1713355200
+sloth version app-db --keep-last 5 --dry-run
+```
+
+Use `--storage <name>` to manage one storage only.
 
 ### Restore a backup (Stage 1)
 
